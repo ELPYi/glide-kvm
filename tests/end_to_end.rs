@@ -289,3 +289,31 @@ fn shortcuts_confirm_on_the_screen_you_are_using() {
         "not on the PC you aren't looking at"
     );
 }
+
+#[test]
+fn cursor_hides_on_the_pc_you_are_not_using() {
+    let p = connected_pair(SwitchSettings::default());
+    let srv = &p.server;
+    *p.client_desk.cursor.lock().unwrap() = Some((500, 300));
+    let hidden = |d: &MockDesktop| d.cursor_hidden.lock().unwrap().last().copied();
+
+    // Crossing over: the cursor disappears here...
+    srv.on_captured(edge_right(0.5));
+    wait_for("in control", || p.client.as_ref().unwrap().status().active);
+    assert_eq!(hidden(&p.server_desk), Some(true), "hidden here while on the other PC");
+    assert_ne!(hidden(&p.client_desk), Some(true), "visible where you are");
+
+    // ...and coming back shows it here and hides it over there.
+    *p.client_desk.edge.lock().unwrap() = Some(EdgeHit {
+        side: Side::Left,
+        frac: 0.5,
+    });
+    srv.on_captured(Captured::Input(InputEvent::Motion { dx: -3, dy: 0 }));
+    wait_for("back here", || srv.status().active.is_none());
+    assert_eq!(hidden(&p.server_desk), Some(false));
+    wait_for("hidden on the other PC", || hidden(&p.client_desk) == Some(true));
+
+    // Using the other PC's own mouse brings its cursor straight back.
+    *p.client_desk.cursor.lock().unwrap() = Some((520, 300));
+    wait_for("shown on local use", || hidden(&p.client_desk) == Some(false));
+}

@@ -31,6 +31,10 @@ pub struct MockDesktop {
     pub block: Mutex<Option<InputBlock>>,
     /// Every on-screen notice shown.
     pub notices: Mutex<Vec<String>>,
+    /// Every `set_cursor_hidden` call, in order.
+    pub cursor_hidden: Mutex<Vec<bool>>,
+    /// What `cursor_position` reports (move it to simulate local mouse use).
+    pub cursor: Mutex<Option<(i32, i32)>>,
 }
 
 impl MockDesktop {
@@ -74,6 +78,12 @@ impl Desktop for MockDesktop {
     }
     fn set_pointer_feel(&self, feel: Option<PointerFeel>) {
         self.feel_calls.lock().unwrap().push(feel);
+    }
+    fn set_cursor_hidden(&self, hidden: bool) {
+        self.cursor_hidden.lock().unwrap().push(hidden);
+    }
+    fn cursor_position(&self) -> Option<(i32, i32)> {
+        *self.cursor.lock().unwrap()
     }
 }
 

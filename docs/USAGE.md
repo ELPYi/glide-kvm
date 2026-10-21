@@ -52,6 +52,13 @@ fire while you're pressing Ctrl+Shift+L. You can also reset a shortcut or turn i
 | **Edge delay** | How long you must push against an edge before switching, in either direction (0–500 ms). |
 | **Same mouse feel on every PC** | On by default. The PC you're controlling temporarily uses this PC's pointer speed and acceleration, so the cursor feels identical. |
 
+### Only one cursor at a time
+
+While you're on another PC, this PC's cursor is hidden, and it reappears
+where you come back in. The other PC hides its cursor when you leave it, and
+shows it again the moment its own mouse or touchpad moves. (Apps that draw
+their own custom cursor, such as some games, may still show theirs.)
+
 ## Command line
 
 `glide-cli.exe` runs without a window, for scripts or servers:

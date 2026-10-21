@@ -398,6 +398,8 @@ impl Server {
                 let p = &mut st.peers[peer];
                 let side = p.entry.side.opposite();
                 self.send_reliable(p, ReliableEv::Enter { side, frac, feel });
+                // The cursor is "over there" now, so don't leave it parked here.
+                self.desktop.set_cursor_hidden(true);
                 log!("-> {}", p.entry.name);
             }
             Switch::Leave { peer, warp } => {
@@ -406,6 +408,7 @@ impl Server {
                 if let Some(frac) = warp {
                     self.desktop.warp_to_edge(p.entry.side, frac);
                 }
+                self.desktop.set_cursor_hidden(false);
                 self.grab.store(false, Ordering::Relaxed);
                 log!("<- back from {}", p.entry.name);
             }

@@ -11,6 +11,7 @@
 //! - [`admin`]: running as administrator via a scheduled task
 //! - [`instance`]: one running copy; a second launch shows the first
 //! - [`blocking`]: can this PC accept input right now (lock screen, admin window)
+//! - [`cursor`]: hiding the cursor while it's on another PC
 //! - [`osd`]: brief on-screen confirmations ("Switching locked")
 //! - [`http`]: HTTPS downloads for updates (WinHTTP)
 //! - [`selftest`]: checks the assumptions capture relies on
@@ -18,6 +19,7 @@
 mod admin;
 mod blocking;
 mod capture;
+mod cursor;
 mod desktop;
 mod http;
 mod instance;

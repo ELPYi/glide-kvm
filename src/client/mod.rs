@@ -138,6 +138,10 @@ struct Client {
     active: bool,
     /// The edge we entered through; pushing back out of it returns to the server.
     entry_side: Side,
+    /// Where the cursor was hidden (control went back to the server). It's
+    /// shown again as soon as it moves from there, i.e. this PC's own mouse
+    /// or touchpad is used.
+    hidden_at: Option<(i32, i32)>,
     keys_down: HashSet<u16>,
     buttons_down: HashSet<Button>,
 }
@@ -167,6 +171,7 @@ impl Client {
             block_checked: None,
             active: false,
             entry_side: Side::Left,
+            hidden_at: None,
             keys_down: HashSet::new(),
             buttons_down: HashSet::new(),
         }
@@ -197,6 +202,7 @@ impl Client {
             }
             self.flush_motion();
             self.check_block();
+            self.check_local_use();
 
             let connected = self.connected();
             if !connected {
@@ -205,6 +211,7 @@ impl Client {
                     log!("server went quiet; releasing everything");
                     self.deactivate();
                 }
+                self.show_cursor();
             }
             if connected != was_connected {
                 was_connected = connected;
@@ -215,7 +222,30 @@ impl Client {
             }
         }
         self.deactivate();
+        self.show_cursor();
         self.publish_status();
+    }
+
+    /// Control went back to the server: hide the cursor here, so the only
+    /// one you see is the one you're moving.
+    fn hide_cursor(&mut self) {
+        if let Some(pos) = self.desktop.cursor_position() {
+            self.desktop.set_cursor_hidden(true);
+            self.hidden_at = Some(pos);
+        }
+    }
+
+    fn show_cursor(&mut self) {
+        if self.hidden_at.take().is_some() {
+            self.desktop.set_cursor_hidden(false);
+        }
+    }
+
+    /// Someone is using this PC's own mouse: show its cursor again.
+    fn check_local_use(&mut self) {
+        if self.hidden_at.is_some() && self.desktop.cursor_position() != self.hidden_at {
+            self.show_cursor();
+        }
     }
 
     /// Handle every packet that's already waiting, without blocking.
@@ -403,11 +433,13 @@ impl Client {
                 // Feel exactly like the sharing PC's mouse (or keep our own).
                 self.desktop.set_pointer_feel(feel);
                 self.desktop.warp_to_edge(side, frac);
+                self.show_cursor();
                 log!("you're on this machine");
                 self.publish_status();
             }
             ReliableEv::Leave => {
                 self.deactivate();
+                self.hide_cursor();
                 log!("back to the server");
                 self.publish_status();
             }

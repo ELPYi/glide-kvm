@@ -73,6 +73,13 @@ pub trait Desktop: Send + Sync {
     fn input_block(&self) -> Option<InputBlock> {
         None
     }
+    /// Hide the cursor on this PC while it's "on another PC" (`false` shows
+    /// it again). Hiding must never outlive glide.
+    fn set_cursor_hidden(&self, _hidden: bool) {}
+    /// Where the cursor is, to notice this PC being used directly.
+    fn cursor_position(&self) -> Option<(i32, i32)> {
+        None
+    }
     /// Temporarily use `feel` (not saved; signing out restores it anyway).
     /// `None` restores this machine's own settings.
     fn set_pointer_feel(&self, _feel: Option<PointerFeel>) {}

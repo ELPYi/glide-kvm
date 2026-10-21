@@ -47,6 +47,8 @@ impl WinDesktop {
 
 pub fn desktop() -> Result<Arc<dyn Desktop>> {
     super::init_dpi();
+    // In case an earlier run was killed while the cursor was hidden.
+    super::cursor::restore();
     Ok(Arc::new(WinDesktop::new()))
 }
 
@@ -179,6 +181,14 @@ impl Desktop for WinDesktop {
 
     fn notify(&self, text: &str) {
         super::osd::show(text);
+    }
+
+    fn set_cursor_hidden(&self, hidden: bool) {
+        super::cursor::set_hidden(hidden);
+    }
+
+    fn cursor_position(&self) -> Option<(i32, i32)> {
+        super::cursor::position()
     }
 
     fn input_block(&self) -> Option<InputBlock> {
