@@ -154,13 +154,25 @@ fn screen_box(ui: &Ui, painter: &Painter, r: Rect, label: &str, tone: Tone, opac
         StrokeKind::Inside,
     );
     let text: Color32 = ui.visuals().strong_text_color().gamma_multiply(opacity);
+    monitor_icon(painter, r.center() - Vec2::new(0.0, 10.0), c);
     painter.text(
-        r.center(),
+        r.center() + Vec2::new(0.0, 13.0),
         Align2::CENTER_CENTER,
         truncate(label, 16),
         FontId::proportional(13.0),
         text,
     );
+}
+
+/// A small line-art monitor (screen, neck, foot) centered on `center`, in
+/// the same thin-stroke style as the welcome page's drawings.
+fn monitor_icon(painter: &Painter, center: Pos2, color: Color32) {
+    let stroke = Stroke::new(1.5, color);
+    let screen = Rect::from_center_size(center - Vec2::new(0.0, 2.0), Vec2::new(24.0, 15.0));
+    painter.rect_stroke(screen, CornerRadius::same(2), stroke, StrokeKind::Inside);
+    let neck = screen.center_bottom();
+    painter.line_segment([neck, neck + Vec2::new(0.0, 4.0)], stroke);
+    painter.line_segment([neck + Vec2::new(-6.0, 4.0), neck + Vec2::new(6.0, 4.0)], stroke);
 }
 
 fn truncate(s: &str, max: usize) -> String {

@@ -23,7 +23,7 @@ Prefer the X to quit? Turn off **Settings → Startup → Keep running in the tr
 
 Downloaded copies keep themselves up to date. Every push to `master` builds
 and publishes a release.
-glide checks for one shortly after starting and every 3 hours, downloads it
+glide checks for one shortly after starting and every 30 minutes, downloads it
 in the background and verifies its checksum. It installs the next time you
 leave the PC alone for a minute, and never while you're controlling another PC.
 glide restarts itself and shows **glide updated to …** on screen.

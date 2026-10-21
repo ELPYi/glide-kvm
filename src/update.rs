@@ -2,7 +2,7 @@
 //!
 //! CI publishes each release with `glide.exe`, `glide-cli.exe` and a small
 //! `latest.toml` manifest (version + SHA-256 of each file). A release build
-//! checks the manifest shortly after starting and every few hours. When a newer
+//! checks the manifest shortly after starting and every 30 minutes. When a newer
 //! version exists it downloads it next to itself (`*.new`), verifies the
 //! checksums, then waits until you're idle (not using this PC, not
 //! controlling another) to swap the files and restart itself.
@@ -30,7 +30,7 @@ pub const CLI_EXE: &str = "glide-cli.exe";
 pub const AFTER_UPDATE_ARG: &str = "--after-update";
 
 const FIRST_CHECK_AFTER: Duration = Duration::from_secs(20);
-const CHECK_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
+const CHECK_EVERY: Duration = Duration::from_secs(30 * 60);
 const RETRY_AFTER_FAILURE: Duration = Duration::from_secs(10 * 60);
 /// Install only after this long with no input and no remote control.
 pub const IDLE_BEFORE_INSTALL: Duration = Duration::from_secs(60);
