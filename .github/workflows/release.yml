@@ -1,0 +1,77 @@
+# Every push to master: lint, test, build, and publish a GitHub release.
+# Installed copies of glide check `releases/latest` and update themselves
+# (see src/update.rs). Versions are <major>.<minor> from Cargo.toml plus the
+# run number, e.g. 0.4.17.
+
+name: release
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write # create releases
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GLIDE_UPDATE_REPO: ${{ github.repository }}
+      # Self-contained exe: no Visual C++ runtime needed on the target PC.
+      RUSTFLAGS: -C target-feature=+crt-static
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: pwsh
+        run: |
+          $line = Select-String -Path Cargo.toml -Pattern '^version = "(\d+)\.(\d+)\.' | Select-Object -First 1
+          $v = "$($line.Matches[0].Groups[1].Value).$($line.Matches[0].Groups[2].Value).${{ github.run_number }}"
+          "GLIDE_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "Version $v"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release --bins
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $out = "release"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          Copy-Item target/release/glide.exe, target/release/glide-cli.exe, glide.example.toml $out
+          $app = (Get-FileHash "$out/glide.exe" -Algorithm SHA256).Hash.ToLower()
+          $cli = (Get-FileHash "$out/glide-cli.exe" -Algorithm SHA256).Hash.ToLower()
+          @"
+          version = "$env:GLIDE_VERSION"
+          glide_sha256 = "$app"
+          cli_sha256 = "$cli"
+          "@ -replace '(?m)^\s+', '' | Out-File -Encoding ascii "$out/latest.toml"
+          Compress-Archive -Path "$out/glide.exe", "$out/glide-cli.exe", "$out/glide.example.toml" -DestinationPath "$out/glide-windows.zip"
+          gh release create "v$env:GLIDE_VERSION" `
+            "$out/glide-windows.zip" "$out/glide.exe" "$out/glide-cli.exe" "$out/latest.toml" `
+            --title "glide $env:GLIDE_VERSION" `
+            --notes "$(git log -1 --pretty=%B)" `
+            --latest

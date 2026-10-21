@@ -1,0 +1,63 @@
+[package]
+name = "glide"
+version = "0.4.0"
+edition = "2021"
+description = "Low-latency software KVM: share one keyboard and mouse across computers"
+default-run = "glide"
+
+[lib]
+path = "src/lib.rs"
+
+# The desktop app. Double-click this one.
+[[bin]]
+name = "glide"
+path = "src/bin/glide.rs"
+
+# Headless command line: server / client / genkey / selftest.
+[[bin]]
+name = "glide-cli"
+path = "src/bin/glide-cli.rs"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+chacha20poly1305 = "0.10"
+sha2 = "0.10"
+# glow (OpenGL) instead of the default wgpu: far lighter for a small utility
+# window. No system fonts: the built-in ones cover the UI.
+eframe = { version = "0.37", default-features = false, features = ["glow", "accesskit", "clipboard", "default_fonts", "links", "wayland", "x11"] }
+spake2 = "0.4"
+local-ip-address = "0.6"
+raw-window-handle = "0.6"
+
+# Tray icon: Windows and macOS for now. On Linux it needs GTK (or a
+# StatusNotifier implementation); add it with the Linux backend.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = "0.26"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_NetworkManagement_QoS",
+    "Win32_Networking_WinHttp",
+    "Win32_Networking_WinSock",
+    "Win32_System_LibraryLoader",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

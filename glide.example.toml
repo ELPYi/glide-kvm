@@ -1,0 +1,54 @@
+# glide.toml lives next to glide.exe. The app writes it for you; this file
+# documents every option. The same secret and port go on every PC.
+
+# "server" = this PC has the keyboard + mouse and shares them.
+# "client" = this PC is controlled by a server.
+role = "server"
+
+# Shared secret. Pairing (Devices -> "+ Pair a device") copies it for you;
+# you only need to touch this when setting PCs up by hand (glide-cli genkey).
+secret = "paste-a-long-random-secret-here"
+
+# UDP port, same on every PC.
+port = 24801
+
+# Start sharing as soon as the app opens.
+start_on_open = true
+
+# Downloaded releases: install new versions automatically (when you're away
+# from the PC for a minute). Builds you make yourself never update.
+auto_update = true
+
+# --- Client only -------------------------------------------------------------
+# The server's address. Lets the client reach out first, so no firewall rule
+# is needed on the client.
+# server_address = "192.168.1.20"     # or "my-desktop" (Tailscale names work)
+
+# --- Server only -------------------------------------------------------------
+[switching]
+# Don't switch PCs while a mouse button is held (so window drags snap).
+block_while_dragging = true
+# Push against an edge this long before switching. 0 = instant.
+edge_delay_ms = 0
+# While controlling another PC, give it this PC's pointer speed and
+# acceleration, so the mouse feels the same everywhere.
+match_pointer_feel = true
+
+# Shortcuts, pressed on the sharing PC. Modifiers: Ctrl, Alt, Shift, Win.
+# Keys: letters, digits, F1-F24, Home, End, PageUp, Insert, Delete, Pause,
+# ScrollLock, Num0-Num9, arrows (Up/Down/Left/Right) and more. "None" turns
+# one off. Easiest to set in the app: Settings -> Shortcuts -> Change.
+[hotkeys]
+lock = "Ctrl+Shift+L"
+
+# One block per PC you can move to. side = which edge of the server's
+# screens it sits beyond: left, right, top or bottom (one PC per side).
+[[clients]]
+name = "laptop"
+address = "192.168.1.50"
+side = "right"
+
+# [[clients]]
+# name = "mini"
+# address = "my-desktop"
+# side = "left"
