@@ -9,5 +9,5 @@ mod this_pc;
 pub use card::{card, card_with};
 pub use form::{field, hint, section_title};
 pub use layout_map::{layout_map, MapDevice};
-pub use pill::pill;
+pub use pill::status_tag;
 pub use this_pc::this_pc_card;

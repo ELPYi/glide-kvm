@@ -72,7 +72,12 @@ pub fn layout_map(
     let faint = ui.visuals().weak_text_color().gamma_multiply(0.12);
     for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
         let r = cell(center, dx, dy);
-        painter.rect_stroke(r, CornerRadius::same(8), Stroke::new(1.0, faint), StrokeKind::Inside);
+        painter.rect_stroke(
+            r,
+            CornerRadius::same(theme::RADIUS),
+            Stroke::new(1.0, faint),
+            StrokeKind::Inside,
+        );
     }
     // Empty sides: faint outlines, highlighted while dragging over them.
     for side in Side::ALL {
@@ -85,7 +90,12 @@ pub fn layout_map(
                 ui.visuals().weak_text_color().gamma_multiply(0.35)
             };
             let stroke = Stroke::new(if highlighted { 2.0 } else { 1.0 }, color);
-            painter.rect_stroke(slot(side), CornerRadius::same(8), stroke, StrokeKind::Inside);
+            painter.rect_stroke(
+                slot(side),
+                CornerRadius::same(theme::RADIUS),
+                stroke,
+                StrokeKind::Inside,
+            );
         }
     }
     for (i, d) in devices.iter().enumerate() {
@@ -136,8 +146,13 @@ fn screen_box(ui: &Ui, painter: &Painter, r: Rect, label: &str, tone: Tone, opac
     } else {
         theme::card_fill(ui)
     };
-    painter.rect_filled(r, CornerRadius::same(8), fill.gamma_multiply(opacity));
-    painter.rect_stroke(r, CornerRadius::same(8), Stroke::new(1.5, c), StrokeKind::Inside);
+    painter.rect_filled(r, CornerRadius::same(theme::RADIUS), fill.gamma_multiply(opacity));
+    painter.rect_stroke(
+        r,
+        CornerRadius::same(theme::RADIUS),
+        Stroke::new(1.5, c),
+        StrokeKind::Inside,
+    );
     let text: Color32 = ui.visuals().strong_text_color().gamma_multiply(opacity);
     painter.text(
         r.center(),

@@ -53,8 +53,7 @@ fn save_bar(ui: &mut Ui, draft: &Config, role: Role, actions: &mut Actions) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("You have unsaved changes").strong());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let save =
-                egui::Button::new(RichText::new("Save").strong().color(egui::Color32::WHITE)).fill(theme::ACCENT);
+            let save = theme::primary("Save");
             if ui.add_enabled(problems.is_empty(), save).clicked() {
                 actions.push(Action::SaveSettings);
             }
@@ -79,7 +78,7 @@ fn this_pc(ui: &mut Ui, draft: &mut Config) {
 /// Things pairing normally handles, plus the firewall fallback. Collapsed:
 /// most people never need it.
 fn advanced(ui: &mut Ui, m: &Model, draft: &mut Config, role: Role, local: &mut SettingsUi, actions: &mut Actions) {
-    egui::CollapsingHeader::new(RichText::new("Advanced").heading().size(17.0))
+    egui::CollapsingHeader::new(RichText::new("Advanced").font(theme::heavy(16.0)).color(theme::TEXT_STRONG))
         .id_salt("advanced")
         .show(ui, |ui| {
             hint(ui, "Pairing sets these up for you. Change them only when setting PCs up by hand.");

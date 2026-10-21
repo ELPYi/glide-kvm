@@ -1,6 +1,6 @@
 //! Test-only: every non-ASCII character in the UI's source must be drawable
-//! by the built-in fonts. (System fonts aren't loaded, to save memory, so a
-//! stray symbol would otherwise render as an empty box.)
+//! by the app's fonts (IBM Plex plus egui's built-ins). System fonts aren't
+//! loaded, to save memory, so a stray symbol would render as an empty box.
 
 use eframe::egui::{Context, FontFamily, FontId, RawInput};
 
@@ -13,6 +13,7 @@ const SOURCES: &[(&str, &str)] = &[
     ("views/logs.rs", include_str!("views/logs.rs")),
     ("views/settings.rs", include_str!("views/settings.rs")),
     ("views/welcome.rs", include_str!("views/welcome.rs")),
+    ("theme.rs", include_str!("theme.rs")),
     ("widgets/card.rs", include_str!("widgets/card.rs")),
     ("widgets/form.rs", include_str!("widgets/form.rs")),
     ("widgets/layout_map.rs", include_str!("widgets/layout_map.rs")),
@@ -23,6 +24,7 @@ const SOURCES: &[(&str, &str)] = &[
 #[test]
 fn every_ui_character_has_a_glyph() {
     let ctx = Context::default();
+    super::theme::apply(&ctx); // the app's fonts (Plex, then the built-ins)
     let _ = ctx.run_ui(RawInput::default(), |_| {}); // load fonts
     let mut missing = Vec::new();
     for (file, src) in SOURCES {

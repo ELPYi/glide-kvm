@@ -15,3 +15,6 @@ strategy, and includes a short Rust primer.
 
 Building locally on Windows with the GNU toolchain needs MinGW; see
 [ARCHITECTURE.md](ARCHITECTURE.md#building-on-windows).
+
+The UI font is IBM Plex (Sans and Mono, `assets/fonts/`), under the SIL Open Font
+License in `assets/fonts/OFL.txt`.

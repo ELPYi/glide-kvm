@@ -1,12 +1,12 @@
 //! "Devices": who's connected, where they sit (drag to rearrange), how fast
 //! the link is, and pairing new PCs.
 
-use eframe::egui::{self, Button, Color32, RichText, TextEdit, Ui};
+use eframe::egui::{self, RichText, TextEdit, Ui};
 
 use super::Model;
 use crate::gui::actions::{Action, Actions, Tab};
 use crate::gui::theme::{self, Tone};
-use crate::gui::widgets::{card, card_with, hint, layout_map, pill, section_title, this_pc_card, MapDevice};
+use crate::gui::widgets::{card, card_with, hint, layout_map, section_title, status_tag, this_pc_card, MapDevice};
 use crate::status::{ClientStatus, EngineStatus, PairingStatus, PeerStatus, ServerStatus};
 
 /// Form fields on this screen that aren't settings.
@@ -37,10 +37,6 @@ pub fn show(ui: &mut Ui, m: &Model, local: &mut DevicesUi, actions: &mut Actions
             EngineStatus::Stopped => stopped(ui, m, actions),
         }
     });
-}
-
-fn primary(text: &str) -> Button<'_> {
-    Button::new(RichText::new(text).strong().color(Color32::WHITE)).fill(theme::ACCENT)
 }
 
 fn stopped(ui: &mut Ui, m: &Model, actions: &mut Actions) {
@@ -80,7 +76,7 @@ fn server(ui: &mut Ui, m: &Model, s: &ServerStatus, local: &mut DevicesUi, actio
         Some(p) => pairing_card(ui, m, p, local, actions),
         None if s.peers.len() < 4 => {
             ui.horizontal(|ui| {
-                if ui.add(primary("+ Pair a device")).clicked() {
+                if ui.add(theme::primary("+ Pair a device")).clicked() {
                     actions.push(Action::StartPairing { poke: None });
                 }
                 if !s.peers.is_empty() && ui.button("Rename or remove…").clicked() {
@@ -134,14 +130,18 @@ fn device_card(ui: &mut Ui, s: &ServerStatus, i: usize, p: &PeerStatus) {
     let tone = peer_tone(s, i, p);
     card_with(ui, (tone == Tone::Active).then_some(Tone::Active), |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new(&p.name).strong().size(16.0));
+            ui.label(
+                RichText::new(&p.name)
+                    .font(theme::heavy(16.0))
+                    .color(theme::TEXT_STRONG),
+            );
             let state = match (tone, p.blocked) {
                 (Tone::Active, _) => "In control",
                 (_, Some(b)) => b.label(),
                 (Tone::Good, _) => "Connected",
                 _ => "Offline",
             };
-            pill(ui, state, tone);
+            status_tag(ui, state, tone);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 latency(ui, p);
             });
@@ -217,18 +217,12 @@ fn pairing_card(ui: &mut Ui, m: &Model, p: &PairingStatus, local: &mut DevicesUi
             .num_columns(2)
             .spacing([16.0, 6.0])
             .show(ui, |ui| {
-                ui.label(RichText::new("This PC's address").weak());
+                ui.label(theme::eyebrow("This PC's address"));
                 let addr = m.this_pc.main_address().unwrap_or_else(|| "?".into());
-                ui.label(RichText::new(addr).monospace().size(20.0).strong());
+                ui.label(RichText::new(addr).monospace().size(20.0).color(theme::TEXT_STRONG));
                 ui.end_row();
-                ui.label(RichText::new("Code").weak());
-                ui.label(
-                    RichText::new(&p.code)
-                        .monospace()
-                        .size(30.0)
-                        .strong()
-                        .color(theme::ACCENT),
-                );
+                ui.label(theme::eyebrow("Code"));
+                ui.label(RichText::new(&p.code).monospace().size(34.0).color(theme::ACCENT));
                 ui.end_row();
             });
         let secs = p.expires_in.as_secs();
@@ -272,13 +266,17 @@ fn client(ui: &mut Ui, m: &Model, c: &ClientStatus, local: &mut DevicesUi, actio
     };
     card_with(ui, (tone == Tone::Active).then_some(Tone::Active), |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Sharing PC").strong().size(16.0));
+            ui.label(
+                RichText::new("Sharing PC")
+                    .font(theme::heavy(16.0))
+                    .color(theme::TEXT_STRONG),
+            );
             let label = match tone {
                 Tone::Active => "You're on this PC",
                 Tone::Good => "Connected",
                 _ => "Not connected",
             };
-            pill(ui, label, tone);
+            status_tag(ui, label, tone);
         });
         match (c.server, m.saved.server_address.as_deref()) {
             (Some(addr), _) if c.connected => hint(ui, &format!("Connected to {}", addr.ip())),
@@ -329,7 +327,10 @@ fn pair_form(ui: &mut Ui, m: &Model, local: &mut DevicesUi, actions: &mut Action
         });
     let ready = !local.server_address.trim().is_empty() && crate::net::pairing::normalize_code(&local.code).len() == 6;
     ui.horizontal(|ui| {
-        if ui.add_enabled(ready && !m.pairing_busy, primary("Pair")).clicked() {
+        if ui
+            .add_enabled(ready && !m.pairing_busy, theme::primary("Pair"))
+            .clicked()
+        {
             actions.push(Action::PairWithServer {
                 address: local.server_address.trim().to_string(),
                 code: std::mem::take(&mut local.code),

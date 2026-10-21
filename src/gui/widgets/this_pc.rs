@@ -3,6 +3,7 @@
 
 use eframe::egui::{RichText, Ui};
 
+use crate::gui::theme;
 use crate::gui::views::ThisPc;
 use crate::gui::widgets::card;
 use crate::net::addr::AddrKind;
@@ -10,13 +11,13 @@ use crate::net::addr::AddrKind;
 pub fn this_pc_card(ui: &mut Ui, pc: &ThisPc) {
     card(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.label(RichText::new("This PC").weak());
-            ui.label(RichText::new(&pc.name).strong());
+            ui.label(theme::eyebrow("This PC"));
+            ui.label(RichText::new(&pc.name).color(theme::TEXT_STRONG));
             match pc.addrs.first() {
                 Some(main) => {
                     ui.label(RichText::new("·").weak());
                     let ip = main.ip.to_string();
-                    ui.label(RichText::new(&ip).monospace().strong().size(16.0))
+                    ui.label(RichText::new(&ip).monospace().size(17.0).color(theme::TEXT_STRONG))
                         .on_hover_text("Type this on another PC to connect to this one");
                     if ui.small_button("Copy").clicked() {
                         ui.ctx().copy_text(ip);
@@ -30,7 +31,7 @@ pub fn this_pc_card(ui: &mut Ui, pc: &ThisPc) {
         let others = pc.addrs.iter().skip(1).collect::<Vec<_>>();
         if !others.is_empty() {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Also reachable at").small().weak());
+                ui.label(theme::eyebrow("Also at"));
                 for (i, a) in others.into_iter().enumerate() {
                     if i > 0 {
                         ui.label(RichText::new("·").small().weak());

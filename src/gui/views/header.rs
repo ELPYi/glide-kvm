@@ -1,48 +1,47 @@
 //! Top bar: name, overall status, Start/Stop, and tabs. (Locking lives on
 //! its shortcut and the tray menu; the Devices tab notes when it's on.)
 
-use eframe::egui::{self, Button, RichText, Ui};
+use eframe::egui::{self, RichText, Ui};
 
 use super::Model;
 use crate::config::Role;
 use crate::gui::actions::{Action, Actions, Tab};
 use crate::gui::theme::{self, Tone};
-use crate::gui::widgets::pill;
+use crate::gui::widgets::status_tag;
 use crate::status::EngineStatus;
 
 pub fn show(ui: &mut Ui, m: &Model, actions: &mut Actions) {
-    ui.add_space(4.0);
+    ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label(RichText::new("glide").size(22.0).strong().color(theme::ACCENT));
+        wordmark(ui);
         if let Some(role) = m.saved.role {
-            ui.label(
-                RichText::new(match role {
-                    Role::Server => "sharing this keyboard & mouse",
-                    Role::Client => "controlled by another PC",
-                })
-                .weak(),
-            );
+            ui.add_space(6.0);
+            ui.label(theme::eyebrow(match role {
+                Role::Server => "sharing this keyboard & mouse",
+                Role::Client => "controlled by another PC",
+            }));
         }
         if m.elevated {
-            ui.label(RichText::new("· admin").weak())
+            ui.label(theme::eyebrow("· admin"))
                 .on_hover_text("Running as administrator: can control Task Manager and other admin windows.");
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if m.saved.role.is_some() && !m.pairing_busy {
+            if m.saved.role.is_none() {
+                return; // first run: nothing to start yet
+            }
+            if !m.pairing_busy {
                 if m.running {
                     if ui.button("Stop").clicked() {
                         actions.push(Action::Stop);
                     }
-                } else if ui
-                    .add(Button::new(RichText::new("Start").strong().color(egui::Color32::WHITE)).fill(theme::ACCENT))
-                    .clicked()
-                {
+                } else if ui.add(theme::primary("Start")).clicked() {
                     actions.push(Action::Start);
                 }
             }
+            ui.add_space(4.0);
             let (text, tone) = overall(m);
-            pill(ui, &text, tone);
+            status_tag(ui, &text, tone);
         });
     });
 
@@ -53,26 +52,67 @@ pub fn show(ui: &mut Ui, m: &Model, actions: &mut Actions) {
     }
 
     if m.saved.role.is_some() {
-        ui.add_space(2.0);
+        ui.add_space(4.0);
         ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 22.0;
             for (tab, name) in [
                 (Tab::Devices, "Devices"),
                 (Tab::Settings, "Settings"),
                 (Tab::Logs, "Logs"),
             ] {
-                if ui
-                    .selectable_label(m.tab == tab, RichText::new(name).size(15.0))
-                    .clicked()
-                {
+                if tab_label(ui, name, m.tab == tab) {
                     actions.push(Action::GoTo(tab));
                 }
             }
         });
+    } else {
+        ui.add_space(6.0);
     }
-    ui.add_space(2.0);
 }
 
-/// One-line summary for the status pill.
+/// "glide" plus a lime block, like a text cursor mid-glide.
+fn wordmark(ui: &mut Ui) {
+    let r = ui.label(
+        RichText::new("glide")
+            .font(theme::heavy(22.0))
+            .color(theme::TEXT_STRONG),
+    );
+    let rect = r.rect;
+    let block = egui::Rect::from_min_size(
+        egui::pos2(rect.right() + 3.0, rect.center().y - 6.0),
+        egui::vec2(8.0, 14.0),
+    );
+    ui.painter().rect_filled(block, 1.0, theme::ACCENT);
+    ui.add_space(12.0);
+}
+
+/// A tab: plain text, with a lime underline when selected.
+fn tab_label(ui: &mut Ui, name: &str, selected: bool) -> bool {
+    let color = if selected { theme::TEXT_STRONG } else { theme::TEXT_DIM };
+    let text = RichText::new(name).font(if selected {
+        theme::heavy(15.0)
+    } else {
+        egui::FontId::proportional(15.0)
+    });
+    let resp = ui.add(egui::Label::new(text.color(color)).sense(egui::Sense::click()));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, name));
+    let hovered = resp.hovered();
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    if selected || hovered {
+        let r = resp.rect;
+        let y = r.bottom() + 5.0;
+        let c = if selected { theme::ACCENT } else { theme::LINE_STRONG };
+        ui.painter().line_segment(
+            [egui::pos2(r.left(), y), egui::pos2(r.right(), y)],
+            egui::Stroke::new(2.0, c),
+        );
+    }
+    resp.clicked()
+}
+
+/// One-line summary for the status tag.
 fn overall(m: &Model) -> (String, Tone) {
     match m.status {
         EngineStatus::Stopped if m.error.is_some() => ("Error".into(), Tone::Bad),

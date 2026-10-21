@@ -1,24 +1,22 @@
-use eframe::egui::{CornerRadius, Frame, Margin, Pos2, RichText, Ui};
+use eframe::egui::{FontId, Pos2, Rect, Sense, Ui, Vec2};
 
 use crate::gui::theme::{self, Tone};
 
-/// A small rounded status label with a colored dot, e.g. "(•) Connected".
-pub fn pill(ui: &mut Ui, text: &str, tone: Tone) {
-    let color = theme::color(ui, tone);
-    // A wide left margin leaves room for the dot, and a single label keeps the
-    // pill sized to its text whatever the surrounding row's direction.
-    let frame = Frame::new()
-        .fill(theme::tint(ui, tone))
-        .corner_radius(CornerRadius::same(255))
-        .inner_margin(Margin {
-            left: 20,
-            right: 9,
-            top: 3,
-            bottom: 3,
-        })
-        .show(ui, |ui| ui.label(RichText::new(text).small().strong().color(color)));
-    // Drawn, not a "●" character: the built-in fonts don't have one.
-    let r = frame.response.rect;
-    ui.painter()
-        .circle_filled(Pos2::new(r.left() + 11.0, r.center().y), 3.5, color);
+const LED: f32 = 7.0;
+const GAP: f32 = 6.0;
+
+/// A status tag: a small square "LED" and an uppercase mono label, e.g.
+/// "[#] CONNECTED". Drawn as one piece so the LED stays on the left in any
+/// layout direction (and so no font needs a dot character).
+pub fn status_tag(ui: &mut Ui, text: &str, tone: Tone) {
+    let color = theme::tone_color(tone);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_uppercase(), FontId::monospace(11.0), color);
+    let size = Vec2::new(LED + GAP + galley.size().x, galley.size().y.max(LED));
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let led = Rect::from_center_size(Pos2::new(rect.left() + LED / 2.0, rect.center().y), Vec2::splat(LED));
+    ui.painter().rect_filled(led, 1.0, color);
+    let text_pos = Pos2::new(led.right() + GAP, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(text_pos, galley, color);
 }
