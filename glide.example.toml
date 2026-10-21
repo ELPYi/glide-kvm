@@ -41,6 +41,13 @@ match_pointer_feel = true
 [hotkeys]
 lock = "Ctrl+Shift+L"
 
+# Don't switch PCs at the screen edges while a game is in focus (on whichever
+# PC it runs). Fullscreen video in browsers and video players never counts.
+[games]
+stay_on_this_pc = true
+# always = ["minecraft.exe"]   # count as games even when windowed
+# never = ["powerpnt.exe"]     # fullscreen apps that aren't games
+
 # One block per PC you can move to. side = which edge of the server's
 # screens it sits beyond: left, right, top or bottom (one PC per side).
 [[clients]]

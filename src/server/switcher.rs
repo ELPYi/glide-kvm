@@ -70,6 +70,8 @@ pub struct Switcher {
     recording: bool,
     active: Option<usize>,
     locked: bool,
+    /// A game is in focus here: the edges don't switch (see `crate::game`).
+    in_game: bool,
     /// Every physical key currently held, wherever its events are going.
     phys_down: HashSet<u16>,
     /// Mouse buttons held while input is local.
@@ -93,6 +95,7 @@ impl Switcher {
             recording: false,
             active: None,
             locked: false,
+            in_game: false,
             phys_down: HashSet::new(),
             local_buttons: HashSet::new(),
             remote_buttons: HashSet::new(),
@@ -113,6 +116,14 @@ impl Switcher {
 
     pub fn set_locked(&mut self, locked: bool) {
         self.locked = locked;
+    }
+
+    pub fn in_game(&self) -> bool {
+        self.in_game
+    }
+
+    pub fn set_in_game(&mut self, in_game: bool) {
+        self.in_game = in_game;
     }
 
     pub fn set_settings(&mut self, settings: SwitchSettings) {
@@ -191,7 +202,7 @@ impl Switcher {
 
     fn on_edge(&mut self, hit: EdgeHit, now: Instant, target: impl Fn(Side) -> Option<usize>) -> Decision {
         let pass = Decision::default();
-        if self.active.is_some() || self.locked {
+        if self.active.is_some() || self.locked || self.in_game {
             self.edge_push = None;
             return pass;
         }
@@ -500,6 +511,24 @@ mod tests {
         s.handle(key(KEY_SCROLLLOCK, false), now, right_only);
         assert!(!s.locked());
         enter(&mut s, now);
+    }
+
+    #[test]
+    fn a_game_in_focus_keeps_you_here() {
+        let mut s = switcher();
+        let now = Instant::now();
+        s.set_in_game(true);
+        assert!(s.in_game());
+        assert_eq!(
+            s.handle(edge(Side::Right, 0.5), now, right_only).switch,
+            None,
+            "mid-game"
+        );
+        s.set_in_game(false);
+        assert!(
+            s.handle(edge(Side::Right, 0.5), now, right_only).switch.is_some(),
+            "game closed"
+        );
     }
 
     #[test]

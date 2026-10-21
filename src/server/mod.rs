@@ -11,6 +11,7 @@
 //! - `glide-srv-recv`: pongs, acks, knocks, edge-leaves and pairing requests.
 //! - `glide-srv-timer`: heartbeats, retransmits, liveness, pairing upkeep.
 //! - `glide-srv-dns`: resolving client addresses, kept off the hot path.
+//! - `glide-srv-game`: notices a game in focus (edges then don't switch).
 
 pub mod pacer;
 pub mod peer;
@@ -25,6 +26,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Result};
 
 use crate::config::{ClientEntry, Config, SwitchSettings};
+use crate::game::{self, GameSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
 use crate::input::Side;
 use crate::log;
@@ -53,6 +55,8 @@ const MIN_TICK: Duration = Duration::from_millis(1);
 /// Waits longer than this use the ordinary (coarse, cheaper) OS sleep.
 const COARSE_SLEEP_OK: Duration = Duration::from_millis(20);
 const POKE_EVERY: Duration = Duration::from_millis(500);
+/// How often to check whether a game is in focus.
+pub const GAME_CHECK_EVERY: Duration = Duration::from_millis(250);
 /// How often blocked threads wake to notice a stop request.
 const POLL: Duration = Duration::from_millis(100);
 /// Order in which pairing fills free sides.
@@ -62,6 +66,8 @@ struct State {
     peers: Vec<Peer>,
     switcher: Switcher,
     motion: MotionBuf,
+    /// The game in focus here, if any.
+    game: Option<String>,
 }
 
 /// A pairing code being shown on this PC.
@@ -93,6 +99,7 @@ pub struct Server {
     recorded_hotkey: Mutex<Option<Option<Hotkey>>>,
     /// Shared with capture: while set, mouse motion is swallowed locally.
     grab: Arc<AtomicBool>,
+    games: Mutex<GameSettings>,
     desktop: Arc<dyn Desktop>,
     running: AtomicBool,
     threads: Mutex<Vec<JoinHandle<()>>>,
@@ -119,12 +126,14 @@ impl Server {
                 peers: cfg.clients.iter().cloned().map(Peer::new).collect(),
                 switcher: Switcher::new(cfg.switching, cfg.hotkeys),
                 motion: MotionBuf::default(),
+                game: None,
             }),
             pacer_wake: Condvar::new(),
             pairing: Mutex::new(None),
             newly_paired: Mutex::new(Vec::new()),
             recorded_hotkey: Mutex::new(None),
             grab: Arc::new(AtomicBool::new(false)),
+            games: Mutex::new(cfg.games.clone()),
             desktop,
             running: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
@@ -139,6 +148,7 @@ impl Server {
             spawn("glide-srv-recv", Server::recv_loop)?,
             spawn("glide-srv-timer", Server::timer_loop)?,
             spawn("glide-srv-dns", Server::resolve_loop)?,
+            spawn("glide-srv-game", Server::game_loop)?,
         ];
         *srv.threads.lock().unwrap() = threads;
         Ok(srv)
@@ -170,6 +180,7 @@ impl Server {
             peers: st.peers.iter().map(Peer::status).collect(),
             active: st.switcher.active(),
             locked: st.switcher.locked(),
+            game: st.game.clone(),
             pairing: self.pairing_status(),
             recording_hotkey: st.switcher.recording(),
         }
@@ -201,6 +212,11 @@ impl Server {
             let interval = motion_interval(settings.mouse_rate_hz, st.peers[i].fast_link());
             st.motion.set_interval(interval);
         }
+    }
+
+    /// Change the game rules live.
+    pub fn set_games(&self, games: GameSettings) {
+        *self.games.lock().unwrap() = games;
     }
 
     pub fn set_hotkeys(&self, hotkeys: Hotkeys) {
@@ -631,6 +647,25 @@ impl Server {
             }
         }
         true
+    }
+
+    /// Watch for a game in focus; while one is, the edges don't switch.
+    fn game_loop(&self) {
+        while self.running.load(Ordering::Relaxed) {
+            let rules = self.games.lock().unwrap().clone();
+            let game = rules.game_in_focus(self.desktop.foreground().as_ref());
+            let mut st = self.lock();
+            if st.game != game {
+                match &game {
+                    Some(g) => log!("{} is in focus: staying on this PC", game::display_name(g)),
+                    None => log!("no game in focus: edge switching is back"),
+                }
+                st.switcher.set_in_game(game.is_some());
+                st.game = game;
+            }
+            drop(st);
+            std::thread::sleep(GAME_CHECK_EVERY);
+        }
     }
 
     fn resolve_loop(&self) {

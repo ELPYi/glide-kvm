@@ -199,6 +199,7 @@ impl App {
             self.engine.with(|e| {
                 e.set_switching(saved.switching);
                 e.set_hotkeys(saved.hotkeys);
+                e.set_games(saved.games.clone());
                 let _ = e.set_layout(&sides(&saved.clients));
             });
         } else if running || self.error.is_some() {
@@ -692,6 +693,7 @@ pub fn needs_restart(old: &Config, new: &Config) -> bool {
         let mut c = Config {
             switching: Default::default(),
             hotkeys: Default::default(),
+            games: Default::default(),
             start_on_open: false,
             run_as_admin: false,
             close_to_tray: false,

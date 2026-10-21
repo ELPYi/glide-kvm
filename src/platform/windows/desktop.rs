@@ -191,6 +191,10 @@ impl Desktop for WinDesktop {
         super::cursor::position()
     }
 
+    fn foreground(&self) -> Option<crate::game::Foreground> {
+        super::foreground::foreground()
+    }
+
     fn input_block(&self) -> Option<InputBlock> {
         super::blocking::input_block(self.elevated)
     }

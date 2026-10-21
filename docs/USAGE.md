@@ -52,6 +52,20 @@ fire while you're pressing Ctrl+Shift+L. You can also reset a shortcut or turn i
 | **Edge delay** | How long you must push against an edge before switching, in either direction (0–500 ms). |
 | **Same mouse feel on every PC** | On by default. The PC you're controlling temporarily uses this PC's pointer speed and acceleration, so the cursor feels identical. |
 
+### Gaming: stay on this PC
+
+While a game is in focus, the screen edges don't switch PCs, so flicking the
+mouse to the edge mid-game never throws it onto another PC. A game is an app
+that fills its whole screen (fullscreen or borderless) or traps the mouse in
+its window. This works on whichever PC the game runs on.
+
+Fullscreen video never counts: browsers (YouTube, Netflix, Twitch...) and
+video players (VLC, mpv, Media Player...) keep switching normally. The header
+shows **In game: staying here** while it's active.
+
+**Settings → Gaming** turns it off, or lists programs that should always or
+never count (e.g. a windowed game, or a fullscreen app that isn't a game).
+
 ### Only one cursor at a time
 
 While you're on another PC, this PC's cursor is hidden, and it reappears

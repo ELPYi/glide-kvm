@@ -223,6 +223,7 @@ fn wrong_secret_never_connects() {
         secret: "a-completely-different-secret".into(),
         server_address: None,
         server_port: 0,
+        games: Default::default(),
     };
     let _client = client::start(client_sock, desk, opts).unwrap();
 
@@ -316,4 +317,53 @@ fn cursor_hides_on_the_pc_you_are_not_using() {
     // Using the other PC's own mouse brings its cursor straight back.
     *p.client_desk.cursor.lock().unwrap() = Some((520, 300));
     wait_for("shown on local use", || hidden(&p.client_desk) == Some(false));
+}
+
+#[test]
+fn a_game_in_focus_keeps_the_mouse_on_its_pc() {
+    use glide::game::Foreground;
+    use glide::server::GAME_CHECK_EVERY;
+    let p = connected_pair(SwitchSettings::default());
+    let srv = &p.server;
+    let client = || p.client.as_ref().unwrap().status();
+    let fullscreen = |app: &str| Foreground {
+        app: app.into(),
+        fullscreen: true,
+        ..Default::default()
+    };
+
+    // Fullscreen video (a browser) isn't a game.
+    *p.server_desk.foreground.lock().unwrap() = Some(fullscreen("chrome.exe"));
+    std::thread::sleep(GAME_CHECK_EVERY * 2);
+    assert_eq!(srv.status().game, None, "fullscreen video doesn't lock");
+
+    // A fullscreen game: the edge doesn't switch.
+    *p.server_desk.foreground.lock().unwrap() = Some(fullscreen("eldenring.exe"));
+    wait_for("game noticed", || srv.status().game.is_some());
+    srv.on_captured(edge_right(0.5));
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(srv.status().active, None, "stayed on this PC mid-game");
+
+    // Out of the game: switching is back.
+    *p.server_desk.foreground.lock().unwrap() = None;
+    wait_for("game gone", || srv.status().game.is_none());
+    srv.on_captured(edge_right(0.5));
+    wait_for("crossed", || client().active);
+
+    // A game on the other PC keeps control there.
+    *p.client_desk.foreground.lock().unwrap() = Some(fullscreen("eldenring.exe"));
+    wait_for("game noticed over there", || client().game.is_some());
+    *p.client_desk.edge.lock().unwrap() = Some(EdgeHit {
+        side: Side::Left,
+        frac: 0.5,
+    });
+    srv.on_captured(Captured::Input(InputEvent::Motion { dx: -3, dy: 0 }));
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(srv.status().active.is_some(), "stayed on the other PC mid-game");
+
+    // Its game closes: the edge back works again.
+    *p.client_desk.foreground.lock().unwrap() = None;
+    wait_for("game gone over there", || client().game.is_none());
+    srv.on_captured(Captured::Input(InputEvent::Motion { dx: -3, dy: 0 }));
+    wait_for("back here", || srv.status().active.is_none());
 }

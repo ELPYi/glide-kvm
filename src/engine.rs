@@ -64,6 +64,7 @@ impl Engine {
                     secret: cfg.secret.clone(),
                     server_address: cfg.server_address.clone(),
                     server_port: cfg.port,
+                    games: cfg.games.clone(),
                 };
                 let handle = client::start(sock, desktop, opts)?;
                 match cfg.server_address.as_deref().filter(|a| !a.trim().is_empty()) {
@@ -95,6 +96,16 @@ impl Engine {
     pub fn set_switching(&self, settings: SwitchSettings) {
         if let Inner::Server { server, .. } = &self.inner {
             server.set_switching(settings);
+        }
+    }
+
+    /// Change the game rules live (both roles: a game counts on whichever PC
+    /// it runs).
+    pub fn set_games(&self, games: crate::game::GameSettings) {
+        match &self.inner {
+            Inner::Server { server, .. } => server.set_games(games),
+            Inner::Client(Some(c)) => c.set_games(games),
+            Inner::Client(None) => {}
         }
     }
 

@@ -12,6 +12,7 @@
 //! - [`instance`]: one running copy; a second launch shows the first
 //! - [`blocking`]: can this PC accept input right now (lock screen, admin window)
 //! - [`cursor`]: hiding the cursor while it's on another PC
+//! - [`foreground`]: what the focused app looks like (game detection)
 //! - [`osd`]: brief on-screen confirmations ("Switching locked")
 //! - [`http`]: HTTPS downloads for updates (WinHTTP)
 //! - [`selftest`]: checks the assumptions capture relies on
@@ -21,6 +22,7 @@ mod blocking;
 mod capture;
 mod cursor;
 mod desktop;
+mod foreground;
 mod http;
 mod instance;
 mod keymap;

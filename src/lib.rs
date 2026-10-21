@@ -26,6 +26,7 @@
 pub mod client;
 pub mod config;
 pub mod engine;
+pub mod game;
 pub mod gui;
 pub mod hotkey;
 pub mod input;

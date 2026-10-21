@@ -5,6 +5,7 @@ use eframe::egui::{self, DragValue, RichText, ScrollArea, Slider, TextEdit, Ui};
 
 use super::Model;
 use crate::config::{ClientEntry, Config, Role, MOUSE_RATES};
+use crate::game::{self, GameSettings};
 use crate::gui::actions::{Action, Actions, HotkeyAction};
 use crate::gui::theme::{self, Tone};
 use crate::gui::widgets::{card, field, hint, section_title};
@@ -15,6 +16,9 @@ use crate::input::Side;
 #[derive(Default)]
 pub struct SettingsUi {
     pub show_secret: bool,
+    /// Typed into the "always / never a game" boxes, not yet added.
+    pub add_game: String,
+    pub add_not_game: String,
 }
 
 pub fn show(ui: &mut Ui, m: &Model, draft: &mut Config, local: &mut SettingsUi, actions: &mut Actions) {
@@ -37,6 +41,7 @@ pub fn show(ui: &mut Ui, m: &Model, draft: &mut Config, local: &mut SettingsUi, 
             card(ui, |ui| switching(ui, draft));
             card(ui, |ui| shortcuts(ui, m, actions));
         }
+        card(ui, |ui| gaming(ui, m, draft, local));
         card(ui, |ui| startup(ui, m, draft, actions));
         card(ui, |ui| updates(ui, m, actions));
         card(ui, |ui| advanced(ui, m, draft, role, local, actions));
@@ -175,6 +180,94 @@ fn devices(ui: &mut Ui, draft: &mut Config) {
             });
         }
     }
+}
+
+fn gaming(ui: &mut Ui, m: &Model, draft: &mut Config, local: &mut SettingsUi) {
+    section_title(ui, "Gaming");
+    field(
+        ui,
+        "Games",
+        Some("Fullscreen games, and games that trap the mouse in their window. Fullscreen video in a browser or video player (YouTube, Netflix, VLC...) doesn't count."),
+        |ui| {
+            ui.checkbox(
+                &mut draft.games.stay_on_this_pc,
+                "Stay on this PC while a game is in focus",
+            );
+            let in_game = match m.status {
+                crate::status::EngineStatus::Server(s) => s.game.as_deref(),
+                crate::status::EngineStatus::Client(c) => c.game.as_deref(),
+                _ => None,
+            };
+            if let Some(g) = in_game {
+                ui.label(
+                    RichText::new(format!("{} is in focus now", game::display_name(g)))
+                        .color(theme::color(ui, Tone::Active)),
+                );
+            }
+        },
+    );
+    if !draft.games.stay_on_this_pc {
+        return;
+    }
+    app_list(
+        ui,
+        "Always a game",
+        "For a game glide doesn't recognize (one that runs in a window, say).",
+        &mut draft.games,
+        true,
+        &mut local.add_game,
+    );
+    app_list(
+        ui,
+        "Never a game",
+        "For a fullscreen app that isn't a game, so switching keeps working while it's open.",
+        &mut draft.games,
+        false,
+        &mut local.add_not_game,
+    );
+}
+
+/// One of the "always / never a game" lists: names with a remove button,
+/// and a box to add one (by program name, e.g. minecraft.exe).
+fn app_list(ui: &mut Ui, label: &str, help: &str, games: &mut GameSettings, always: bool, input: &mut String) {
+    field(ui, label, Some(help), |ui| {
+        let list = if always { &mut games.always } else { &mut games.never };
+        let mut remove = None;
+        if !list.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for (i, app) in list.iter().enumerate() {
+                    ui.label(
+                        RichText::new(game::display_name(app))
+                            .monospace()
+                            .color(theme::TEXT_STRONG),
+                    );
+                    if ui.small_button("×").on_hover_text("Remove").clicked() {
+                        remove = Some(i);
+                    }
+                    ui.add_space(6.0);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            list.remove(i);
+        }
+        ui.horizontal(|ui| {
+            let resp = ui.add(
+                TextEdit::singleline(input)
+                    .hint_text(if always {
+                        "program, e.g. minecraft.exe"
+                    } else {
+                        "program, e.g. powerpnt.exe"
+                    })
+                    .desired_width(200.0),
+            );
+            let entered = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (ui.button("Add").clicked() || entered) && !input.trim().is_empty() {
+                games.add(input, always);
+                input.clear();
+            }
+        });
+    });
 }
 
 fn switching(ui: &mut Ui, draft: &mut Config) {

@@ -80,6 +80,10 @@ pub trait Desktop: Send + Sync {
     fn cursor_position(&self) -> Option<(i32, i32)> {
         None
     }
+    /// What the focused app looks like, to tell when a game is in focus.
+    fn foreground(&self) -> Option<crate::game::Foreground> {
+        None
+    }
     /// Temporarily use `feel` (not saved; signing out restores it anyway).
     /// `None` restores this machine's own settings.
     fn set_pointer_feel(&self, _feel: Option<PointerFeel>) {}

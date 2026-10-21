@@ -121,11 +121,13 @@ fn overall(m: &Model) -> (String, Tone) {
             let online = s.peers.iter().filter(|p| p.connected).count();
             match (s.active, online) {
                 (Some(i), _) => (format!("On {}", s.peers[i].name), Tone::Active),
+                (None, _) if s.game.is_some() => ("In game: staying here".into(), Tone::Warn),
                 (None, 0) => ("Waiting for devices".into(), Tone::Warn),
                 (None, n) => (format!("{n} of {} connected", s.peers.len()), Tone::Good),
             }
         }
         EngineStatus::Client(c) => match (c.connected, c.active) {
+            (_, true) if c.game.is_some() => ("In game: staying here".into(), Tone::Active),
             (_, true) => ("In control".into(), Tone::Active),
             (true, false) => ("Connected".into(), Tone::Good),
             (false, _) => ("Waiting for server".into(), Tone::Warn),

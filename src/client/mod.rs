@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::game::{self, GameSettings};
 use crate::input::{Button, InputBlock, InputEvent, Side};
 use crate::log;
 use crate::net::addr::resolve;
@@ -49,6 +50,8 @@ const HOT_POLL_FOR: Duration = Duration::from_millis(3);
 const BLOCK_CHECK_EVERY: Duration = Duration::from_millis(100);
 /// Socket read timeout: how often the loop wakes when idle.
 const POLL: Duration = Duration::from_millis(100);
+/// How often to check for a game in focus while this PC is being controlled.
+const GAME_CHECK_EVERY: Duration = Duration::from_millis(250);
 
 pub struct ClientOptions {
     pub secret: String,
@@ -56,11 +59,14 @@ pub struct ClientOptions {
     pub server_address: Option<String>,
     /// Port assumed when `server_address` doesn't name one.
     pub server_port: u16,
+    /// A game in focus here keeps control here (the edge back doesn't switch).
+    pub games: GameSettings,
 }
 
 /// A running client. Stops when [`ClientHandle::stop`] is called or dropped.
 pub struct ClientHandle {
     status: Arc<Mutex<ClientStatus>>,
+    games: Arc<Mutex<GameSettings>>,
     running: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -72,6 +78,11 @@ impl ClientHandle {
 
     pub fn stop(mut self) {
         self.shutdown();
+    }
+
+    /// Change the game rules live.
+    pub fn set_games(&self, games: GameSettings) {
+        *self.games.lock().unwrap_or_else(|e| e.into_inner()) = games;
     }
 
     fn shutdown(&mut self) {
@@ -95,7 +106,8 @@ pub fn start(sock: UdpSocket, desktop: Arc<dyn Desktop>, opts: ClientOptions) ->
         ..Default::default()
     }));
     let running = Arc::new(AtomicBool::new(true));
-    let mut client = Client::new(sock, desktop, opts, status.clone());
+    let games = Arc::new(Mutex::new(opts.games.clone()));
+    let mut client = Client::new(sock, desktop, opts, status.clone(), games.clone());
     let r = running.clone();
     let thread = std::thread::Builder::new().name("glide-client".into()).spawn(move || {
         platform::boost_latency_thread();
@@ -103,6 +115,7 @@ pub fn start(sock: UdpSocket, desktop: Arc<dyn Desktop>, opts: ClientOptions) ->
     })?;
     Ok(ClientHandle {
         status,
+        games,
         running,
         thread: Some(thread),
     })
@@ -142,12 +155,22 @@ struct Client {
     /// shown again as soon as it moves from there, i.e. this PC's own mouse
     /// or touchpad is used.
     hidden_at: Option<(i32, i32)>,
+    games: Arc<Mutex<GameSettings>>,
+    /// The game in focus here while being controlled, and when last checked.
+    game: Option<String>,
+    game_checked: Option<Instant>,
     keys_down: HashSet<u16>,
     buttons_down: HashSet<Button>,
 }
 
 impl Client {
-    fn new(sock: UdpSocket, desktop: Arc<dyn Desktop>, opts: ClientOptions, status: Arc<Mutex<ClientStatus>>) -> Self {
+    fn new(
+        sock: UdpSocket,
+        desktop: Arc<dyn Desktop>,
+        opts: ClientOptions,
+        status: Arc<Mutex<ClientStatus>>,
+        games: Arc<Mutex<GameSettings>>,
+    ) -> Self {
         Client {
             knock_cipher: crypto::session_cipher(&opts.secret, crypto::KNOCK_SESSION),
             sock,
@@ -172,6 +195,9 @@ impl Client {
             active: false,
             entry_side: Side::Left,
             hidden_at: None,
+            games,
+            game: None,
+            game_checked: None,
             keys_down: HashSet::new(),
             buttons_down: HashSet::new(),
         }
@@ -203,6 +229,7 @@ impl Client {
             self.flush_motion();
             self.check_block();
             self.check_local_use();
+            self.check_game();
 
             let connected = self.connected();
             if !connected {
@@ -238,6 +265,29 @@ impl Client {
     fn show_cursor(&mut self) {
         if self.hidden_at.take().is_some() {
             self.desktop.set_cursor_hidden(false);
+        }
+    }
+
+    /// While being controlled, notice a game in focus here: the edge back to
+    /// the sharing PC then doesn't switch.
+    fn check_game(&mut self) {
+        let game = if !self.active {
+            None
+        } else if self.game_checked.is_some_and(|t| t.elapsed() < GAME_CHECK_EVERY) {
+            return;
+        } else {
+            self.game_checked = Some(Instant::now());
+            let rules = self.games.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            rules.game_in_focus(self.desktop.foreground().as_ref())
+        };
+        if game != self.game {
+            match &game {
+                Some(g) => log!("{} is in focus: staying on this PC", game::display_name(g)),
+                None if self.active => log!("no game in focus: edge switching is back"),
+                None => {}
+            }
+            self.game = game;
+            self.publish_status();
         }
     }
 
@@ -301,6 +351,7 @@ impl Client {
         s.server = self.server;
         s.connected = self.connected();
         s.active = self.active;
+        s.game = self.game.clone();
     }
 
     /// Say hello to the configured server (see module docs for why).
@@ -413,7 +464,8 @@ impl Client {
             return;
         }
         if let Some(hit) = self.desktop.edge_hit(dx, dy) {
-            if hit.side == self.entry_side {
+            // Mid-game, the edge is just the edge of the game.
+            if hit.side == self.entry_side && self.game.is_none() {
                 self.send(&ClientMsg::EdgeLeave {
                     side: hit.side,
                     frac: hit.frac,

@@ -35,6 +35,8 @@ pub struct MockDesktop {
     pub cursor_hidden: Mutex<Vec<bool>>,
     /// What `cursor_position` reports (move it to simulate local mouse use).
     pub cursor: Mutex<Option<(i32, i32)>>,
+    /// What `foreground` reports (the focused app).
+    pub foreground: Mutex<Option<glide::game::Foreground>>,
 }
 
 impl MockDesktop {
@@ -85,6 +87,9 @@ impl Desktop for MockDesktop {
     fn cursor_position(&self) -> Option<(i32, i32)> {
         *self.cursor.lock().unwrap()
     }
+    fn foreground(&self) -> Option<glide::game::Foreground> {
+        self.foreground.lock().unwrap().clone()
+    }
 }
 
 pub fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
@@ -119,6 +124,7 @@ pub fn start_client(sock: UdpSocket, desk: Arc<MockDesktop>, server_address: Opt
         secret: SECRET.into(),
         server_address,
         server_port: 0,
+        games: Default::default(),
     };
     client::start(sock, desk, opts).unwrap()
 }

@@ -111,6 +111,15 @@ fn server(ui: &mut Ui, m: &Model, s: &ServerStatus, local: &mut DevicesUi, actio
             hint(ui, "Drag a device to the side of your screens it's on.");
         }
     });
+    if let Some(g) = &s.game {
+        hint(
+            ui,
+            &format!(
+                "{} is in focus, so the screen edges won't switch PCs until you leave it.",
+                crate::game::display_name(g)
+            ),
+        );
+    }
     if s.locked {
         hint(
             ui,
@@ -282,6 +291,15 @@ fn client(ui: &mut Ui, m: &Model, c: &ClientStatus, local: &mut DevicesUi, actio
             (Some(addr), _) if c.connected => hint(ui, &format!("Connected to {}", addr.ip())),
             (_, Some(a)) if !a.trim().is_empty() => hint(ui, &format!("Looking for {a}…")),
             _ => hint(ui, "Not paired yet."),
+        }
+        if let Some(g) = &c.game {
+            hint(
+                ui,
+                &format!(
+                    "{} is in focus, so the edge back won't switch PCs until you leave it.",
+                    crate::game::display_name(g)
+                ),
+            );
         }
     });
 

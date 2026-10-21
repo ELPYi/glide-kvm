@@ -21,6 +21,8 @@ pub struct ServerStatus {
     /// Index into `peers` of the machine currently receiving input.
     pub active: Option<usize>,
     pub locked: bool,
+    /// The game in focus here (edges don't switch while it is), if any.
+    pub game: Option<String>,
     /// A pairing code is being shown.
     pub pairing: Option<PairingStatus>,
     /// Waiting for a key combination to record as a shortcut.
@@ -64,4 +66,6 @@ pub struct ClientStatus {
     pub connected: bool,
     /// This machine is currently receiving the keyboard and mouse.
     pub active: bool,
+    /// The game in focus here (the edge back doesn't switch while it is).
+    pub game: Option<String>,
 }

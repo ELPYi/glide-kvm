@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::game::GameSettings;
 use crate::hotkey::Hotkeys;
 use crate::input::Side;
 
@@ -64,6 +65,9 @@ pub struct Config {
     /// Keyboard shortcuts (pressed on the sharing PC).
     #[serde(default)]
     pub hotkeys: Hotkeys,
+    /// Don't switch PCs while a game is in focus (on whichever PC it runs).
+    #[serde(default)]
+    pub games: GameSettings,
     /// Server only: the machines it can hand input to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clients: Vec<ClientEntry>,
@@ -140,6 +144,7 @@ impl Config {
             sign_in_set_up: false,
             switching: SwitchSettings::default(),
             hotkeys: Hotkeys::default(),
+            games: GameSettings::default(),
             clients: Vec::new(),
         }
     }
