@@ -28,4 +28,13 @@
   The UAC prompt itself, the lock screen and Ctrl+Alt+Del can't be
   controlled remotely; Windows keeps those on a protected desktop.
 - **Ctrl+Alt+Del** always goes to the PC you're physically at; Windows reserves it.
+- **No sound from another PC**: check **Settings → Sound** on both PCs, and
+  that both run glide 0.4.7 or later. The Logs tab on each says whether it's
+  sending or playing, or why it can't (no speakers found, say).
+- **Sound crackles**: usually Wi-Fi dropouts. glide keeps a little more in
+  hand after each one, so it should settle within seconds. A cable helps
+  most.
+- **The other PC stayed muted**: glide unmutes it when it stops, but if
+  glide was killed (Task Manager, a crash) it couldn't. Unmute it from the
+  taskbar volume icon.
 - The **Logs** tab shows what's happening, and **Copy all** grabs it for a bug report.

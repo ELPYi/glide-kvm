@@ -15,9 +15,11 @@
 //! - [`foreground`]: what the focused app looks like (game detection)
 //! - [`osd`]: brief on-screen confirmations ("Switching locked")
 //! - [`http`]: HTTPS downloads for updates (WinHTTP)
+//! - [`audio`]: recording what this PC plays, and playing sound (WASAPI)
 //! - [`selftest`]: checks the assumptions capture relies on
 
 mod admin;
+mod audio;
 mod blocking;
 mod capture;
 mod cursor;
@@ -39,6 +41,7 @@ use std::sync::Once;
 
 use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
+pub use audio::{open_loopback, open_speaker};
 pub use capture::start_capture;
 pub use desktop::desktop;
 pub use http::http_get;

@@ -31,6 +31,14 @@ pub fn http_get(_url: &str) -> Result<Vec<u8>> {
 
 pub fn raise_process_priority() {}
 
+pub fn open_loopback(_mute: bool) -> Result<Box<dyn crate::audio::AudioIn>> {
+    bail!(MSG)
+}
+
+pub fn open_speaker() -> Result<Box<dyn crate::audio::AudioOut>> {
+    bail!(MSG)
+}
+
 pub fn prioritize_traffic(_sock: &std::net::UdpSocket, _dest: std::net::SocketAddr) -> bool {
     false
 }

@@ -20,9 +20,11 @@
 //! | [`gui`]      | The desktop app                                                   |
 //! | [`logging`]  | `log!` macro + in-memory log the app displays                     |
 //! | [`update`]   | Over-the-air updates from GitHub Releases                         |
+//! | [`audio`]    | Other PCs' sound, played on the sharing PC                        |
 //!
 //! See `docs/ARCHITECTURE.md` for the threads, data flow and protocol.
 
+pub mod audio;
 pub mod client;
 pub mod config;
 pub mod engine;

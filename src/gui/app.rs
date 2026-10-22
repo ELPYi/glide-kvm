@@ -295,6 +295,14 @@ impl App {
                 }
             }
             Action::CheckForUpdates => self.updater.check_now(),
+            Action::SetAudio { settings, save } => {
+                self.saved.audio = settings;
+                self.draft.audio = settings;
+                self.engine.with(|e| e.set_audio(settings));
+                if save {
+                    self.save();
+                }
+            }
             Action::MoveDevice { index, side } => {
                 if move_device(&mut self.saved.clients, index, side) && self.save() {
                     // Keep the settings draft's sides in step (names/addresses untouched).
@@ -694,6 +702,7 @@ pub fn needs_restart(old: &Config, new: &Config) -> bool {
             switching: Default::default(),
             hotkeys: Default::default(),
             games: Default::default(),
+            audio: Default::default(),
             start_on_open: false,
             run_as_admin: false,
             close_to_tray: false,

@@ -57,6 +57,8 @@ pub struct PeerStatus {
     pub rtt_worst_ms: Option<f32>,
     /// It can't accept input right now (locked, admin window in front).
     pub blocked: Option<InputBlock>,
+    /// Its sound is playing here right now.
+    pub sound: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -68,4 +70,6 @@ pub struct ClientStatus {
     pub active: bool,
     /// The game in focus here (the edge back doesn't switch while it is).
     pub game: Option<String>,
+    /// The sharing PC wants this PC's sound (and sharing is on here).
+    pub sending_sound: bool,
 }

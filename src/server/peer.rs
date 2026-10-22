@@ -88,6 +88,7 @@ impl Peer {
             rtt_ms: self.rtt.median().filter(|_| connected),
             rtt_worst_ms: self.rtt.worst().filter(|_| connected),
             blocked: self.blocked.filter(|_| connected),
+            sound: false, // filled in by the server, which owns the player
         }
     }
 }

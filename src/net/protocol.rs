@@ -3,15 +3,19 @@
 //! Hand-rolled little-endian encoding: tiny, allocation-light, and with no
 //! serde overhead on the hot path. Every message starts with a one-byte tag.
 //! Changing a layout here is a protocol break: bump the `glide-v4` label in
-//! `crypto.rs` so old and new builds refuse each other cleanly.
+//! `crypto.rs` so old and new builds refuse each other cleanly. Adding is
+//! not: decoders ignore trailing bytes and unknown tags, so a field appended
+//! to the end (read as optional) or a new message keeps old builds working.
 
 use crate::input::{Button, InputBlock, InputEvent, PointerFeel, Side};
 
 /// Server -> client.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ServerMsg {
-    /// Sent every 200 ms; the client echoes `sent_micros` back for RTT.
-    Heartbeat { sent_micros: u64 },
+    /// Sent every 25-200 ms; the client echoes `sent_micros` back for RTT.
+    /// `wants_sound`: send this PC your sound (appended in 0.4.7; older
+    /// servers don't send it, which reads as no).
+    Heartbeat { sent_micros: u64, wants_sound: bool },
     /// Unreliable: a lost motion packet is just a skipped pixel or two.
     Motion { dx: i32, dy: i32 },
     /// Delivered in order, acked and retransmitted (see [`super::reliable`]).
@@ -78,6 +82,9 @@ pub enum ClientMsg {
     /// session exists. Outbound traffic makes the client's own firewall accept
     /// the server's replies, so no inbound rule is needed.
     Knock,
+    /// 10 ms of this PC's sound, Opus-compressed (see `crate::audio`).
+    /// `stream` changes when the client restarts; `seq` counts frames.
+    Audio { stream: u32, seq: u32, opus: Vec<u8> },
 }
 
 struct W(Vec<u8>);
@@ -184,8 +191,11 @@ impl ServerMsg {
     pub fn encode(&self) -> Vec<u8> {
         let mut w = W(Vec::with_capacity(16));
         match self {
-            ServerMsg::Heartbeat { sent_micros } => {
-                w.u8(0x01).u64(*sent_micros);
+            ServerMsg::Heartbeat {
+                sent_micros,
+                wants_sound,
+            } => {
+                w.u8(0x01).u64(*sent_micros).u8(*wants_sound as u8);
             }
             ServerMsg::Motion { dx, dy } => {
                 w.u8(0x02).i32(*dx).i32(*dy);
@@ -219,7 +229,10 @@ impl ServerMsg {
     pub fn decode(buf: &[u8]) -> Option<ServerMsg> {
         let mut r = R(buf);
         Some(match r.u8()? {
-            0x01 => ServerMsg::Heartbeat { sent_micros: r.u64()? },
+            0x01 => ServerMsg::Heartbeat {
+                sent_micros: r.u64()?,
+                wants_sound: r.u8().is_some_and(|b| b != 0),
+            },
             0x02 => ServerMsg::Motion {
                 dx: r.i32()?,
                 dy: r.i32()?,
@@ -273,6 +286,10 @@ impl ClientMsg {
             ClientMsg::Knock => {
                 w.u8(0x24);
             }
+            ClientMsg::Audio { stream, seq, opus } => {
+                w.u8(0x25).u32(*stream).u32(*seq);
+                w.0.extend_from_slice(opus);
+            }
         }
         w.0
     }
@@ -291,6 +308,11 @@ impl ClientMsg {
                 frac: r.f32()?,
             },
             0x24 => ClientMsg::Knock,
+            0x25 => ClientMsg::Audio {
+                stream: r.u32()?,
+                seq: r.u32()?,
+                opus: r.0.to_vec(),
+            },
             _ => return None,
         })
     }
@@ -305,6 +327,11 @@ mod tests {
         let msgs = [
             ServerMsg::Heartbeat {
                 sent_micros: 1_700_000_000_000_000,
+                wants_sound: true,
+            },
+            ServerMsg::Heartbeat {
+                sent_micros: 5,
+                wants_sound: false,
             },
             ServerMsg::Motion { dx: -5, dy: 1200 },
             ServerMsg::Reliable {
@@ -374,10 +401,29 @@ mod tests {
                 frac: 0.5,
             },
             ClientMsg::Knock,
+            ClientMsg::Audio {
+                stream: 77,
+                seq: 4_000_000_000,
+                opus: vec![1, 2, 3, 250],
+            },
         ];
         for m in msgs {
             assert_eq!(ClientMsg::decode(&m.encode()), Some(m));
         }
+    }
+
+    #[test]
+    fn older_builds_still_understand_each_other() {
+        // A 0.4.6 server's heartbeat (no sound byte) reads as "no sound".
+        let mut old = vec![0x01];
+        old.extend_from_slice(&9u64.to_le_bytes());
+        assert_eq!(
+            ServerMsg::decode(&old),
+            Some(ServerMsg::Heartbeat {
+                sent_micros: 9,
+                wants_sound: false
+            })
+        );
     }
 
     #[test]

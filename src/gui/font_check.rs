@@ -25,7 +25,8 @@ const SOURCES: &[(&str, &str)] = &[
 fn every_ui_character_has_a_glyph() {
     let ctx = Context::default();
     super::theme::apply(&ctx); // the app's fonts (Plex, then the built-ins)
-    let _ = ctx.run_ui(RawInput::default(), |_| {}); // load fonts
+                               // Load fonts. No renderer to upload the atlas to (debug builds assert on it).
+    ctx.run_ui(RawInput::default(), |_| {}).textures_delta.clear();
     let mut missing = Vec::new();
     for (file, src) in SOURCES {
         for line in src.lines().filter(|l| !l.trim_start().starts_with("//")) {

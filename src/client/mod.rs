@@ -9,6 +9,10 @@
 //! wake-up catches up in one step instead of replaying a growing backlog
 //! move by move, which is what turns a hiccup into seconds of lag.
 //!
+//! This PC's sound is sent by a separate thread (`crate::audio::share`),
+//! through an [`AudioLink`]: the session details it needs, kept current by
+//! this thread. It never touches this loop.
+//!
 //! If the server's address is configured, the client also *knocks* (sends a
 //! small authenticated packet) until connected. Because the client spoke
 //! first, its firewall treats the server's packets as replies and lets them
@@ -17,13 +21,14 @@
 use std::collections::HashSet;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
+use crate::audio::Uplink;
 use crate::game::{self, GameSettings};
 use crate::input::{Button, InputBlock, InputEvent, Side};
 use crate::log;
@@ -63,10 +68,58 @@ pub struct ClientOptions {
     pub games: GameSettings,
 }
 
+/// What the sound sender needs to reach the server, kept current by the
+/// client thread.
+#[derive(Default)]
+pub struct AudioLink {
+    /// Where and how to send: `None` while not connected.
+    target: Mutex<Option<AudioTarget>>,
+    /// The server asked for sound (in its latest heartbeat).
+    wanted: AtomicBool,
+    /// Packet counter shared with the client thread, so the two never
+    /// reuse a nonce. Never reset (a new session doesn't need it to be).
+    counter: AtomicU64,
+}
+
+struct AudioTarget {
+    session: u64,
+    cipher: Cipher,
+    server: SocketAddr,
+}
+
+/// The sound sender's way out: an [`Uplink`] over the client's socket.
+pub struct AudioSender {
+    link: Arc<AudioLink>,
+    sock: UdpSocket,
+}
+
+impl Uplink for AudioSender {
+    fn ready(&self) -> bool {
+        self.link.wanted.load(Ordering::Relaxed) && self.link.target.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
+    fn send(&self, stream: u32, seq: u32, opus: &[u8]) {
+        let guard = self.link.target.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(t) = guard.as_ref() else { return };
+        let ctr = self.link.counter.fetch_add(1, Ordering::Relaxed) + 1;
+        let msg = ClientMsg::Audio {
+            stream,
+            seq,
+            opus: opus.to_vec(),
+        };
+        let pkt = crypto::seal(&t.cipher, crypto::DIR_TO_SERVER, t.session, ctr, &msg.encode());
+        let server = t.server;
+        drop(guard);
+        let _ = self.sock.send_to(&pkt, server);
+    }
+}
+
 /// A running client. Stops when [`ClientHandle::stop`] is called or dropped.
 pub struct ClientHandle {
     status: Arc<Mutex<ClientStatus>>,
     games: Arc<Mutex<GameSettings>>,
+    audio: Arc<AudioLink>,
+    sock: UdpSocket,
     running: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
@@ -83,6 +136,14 @@ impl ClientHandle {
     /// Change the game rules live.
     pub fn set_games(&self, games: GameSettings) {
         *self.games.lock().unwrap_or_else(|e| e.into_inner()) = games;
+    }
+
+    /// A way for the sound sender to reach the server.
+    pub fn audio_sender(&self) -> Result<AudioSender> {
+        Ok(AudioSender {
+            link: self.audio.clone(),
+            sock: self.sock.try_clone()?,
+        })
     }
 
     fn shutdown(&mut self) {
@@ -107,7 +168,9 @@ pub fn start(sock: UdpSocket, desktop: Arc<dyn Desktop>, opts: ClientOptions) ->
     }));
     let running = Arc::new(AtomicBool::new(true));
     let games = Arc::new(Mutex::new(opts.games.clone()));
-    let mut client = Client::new(sock, desktop, opts, status.clone(), games.clone());
+    let audio = Arc::new(AudioLink::default());
+    let handle_sock = sock.try_clone()?;
+    let mut client = Client::new(sock, desktop, opts, status.clone(), games.clone(), audio.clone());
     let r = running.clone();
     let thread = std::thread::Builder::new().name("glide-client".into()).spawn(move || {
         platform::boost_latency_thread();
@@ -116,6 +179,8 @@ pub fn start(sock: UdpSocket, desktop: Arc<dyn Desktop>, opts: ClientOptions) ->
     Ok(ClientHandle {
         status,
         games,
+        audio,
+        sock: handle_sock,
         running,
         thread: Some(thread),
     })
@@ -132,7 +197,8 @@ struct Client {
     cipher: Option<Cipher>,
     knock_cipher: Cipher,
     replay: ReplayWindow,
-    counter: u64,
+    /// Shared with the sound sender (see [`AudioLink`]).
+    audio: Arc<AudioLink>,
     server: Option<SocketAddr>,
     last_rx: Option<Instant>,
 
@@ -170,6 +236,7 @@ impl Client {
         opts: ClientOptions,
         status: Arc<Mutex<ClientStatus>>,
         games: Arc<Mutex<GameSettings>>,
+        audio: Arc<AudioLink>,
     ) -> Self {
         Client {
             knock_cipher: crypto::session_cipher(&opts.secret, crypto::KNOCK_SESSION),
@@ -181,7 +248,7 @@ impl Client {
             session: 0,
             cipher: None,
             replay: ReplayWindow::default(),
-            counter: 0,
+            audio,
             server: None,
             last_rx: None,
             knock_target: None,
@@ -242,6 +309,7 @@ impl Client {
             }
             if connected != was_connected {
                 was_connected = connected;
+                self.sync_audio_link();
                 if !connected {
                     log!("disconnected from server");
                 }
@@ -250,7 +318,26 @@ impl Client {
         }
         self.deactivate();
         self.show_cursor();
+        self.server = None;
+        self.sync_audio_link();
         self.publish_status();
+    }
+
+    /// Tell the sound sender where the server is now (or that it's gone).
+    fn sync_audio_link(&self) {
+        let target = match (self.connected(), self.server, &self.cipher) {
+            (true, Some(server), Some(cipher)) => Some(AudioTarget {
+                session: self.session,
+                cipher: cipher.clone(),
+                server,
+            }),
+            _ => None,
+        };
+        *self.audio.target.lock().unwrap_or_else(|e| e.into_inner()) = target;
+    }
+
+    fn next_counter(&self) -> u64 {
+        self.audio.counter.fetch_add(1, Ordering::Relaxed) + 1
     }
 
     /// Control went back to the server: hide the cursor here, so the only
@@ -369,12 +456,11 @@ impl Client {
         let Some(target) = self.knock_target else { return };
         if self.last_knock.is_none_or(|t| t.elapsed() >= KNOCK_EVERY) {
             self.last_knock = Some(Instant::now());
-            self.counter += 1;
             let pkt = crypto::seal(
                 &self.knock_cipher,
                 crypto::DIR_TO_SERVER,
                 crypto::KNOCK_SESSION,
-                self.counter,
+                self.next_counter(),
                 &ClientMsg::Knock.encode(),
             );
             let _ = self.sock.send_to(&pkt, target);
@@ -386,7 +472,8 @@ impl Client {
         if h.dir != crypto::DIR_TO_CLIENT || h.session < self.session || h.session == crypto::KNOCK_SESSION {
             return;
         }
-        let plain = if h.session == self.session {
+        let adopted = h.session != self.session;
+        let plain = if !adopted {
             match self.cipher.as_ref().and_then(|c| crypto::open(c, &h, pkt)) {
                 Some(p) => p,
                 None => return,
@@ -404,18 +491,26 @@ impl Client {
             return;
         }
         let Some(msg) = ServerMsg::decode(&plain) else { return };
-        if self.server != Some(src) && platform::prioritize_traffic(&self.sock, src) {
+        let moved = self.server != Some(src);
+        if moved && platform::prioritize_traffic(&self.sock, src) {
             log!("network priority on");
         }
         self.server = Some(src);
         let reconnected = !self.connected();
         self.last_rx = Some(Instant::now());
+        if reconnected || moved || adopted {
+            self.sync_audio_link();
+        }
         if reconnected {
             self.publish_status();
         }
 
         match msg {
-            ServerMsg::Heartbeat { sent_micros } => {
+            ServerMsg::Heartbeat {
+                sent_micros,
+                wants_sound,
+            } => {
+                self.audio.wanted.store(wants_sound, Ordering::Relaxed);
                 self.send(&ClientMsg::Pong {
                     instance: self.instance,
                     echo_micros: sent_micros,
@@ -445,7 +540,6 @@ impl Client {
         self.session = session;
         self.cipher = Some(cipher);
         self.replay = ReplayWindow::default();
-        self.counter = 0;
         self.inbox.reset();
     }
 
@@ -538,8 +632,8 @@ impl Client {
         let (Some(addr), Some(cipher)) = (self.server, self.cipher.as_ref()) else {
             return;
         };
-        self.counter += 1;
-        let pkt = crypto::seal(cipher, crypto::DIR_TO_SERVER, self.session, self.counter, &msg.encode());
+        let ctr = self.next_counter();
+        let pkt = crypto::seal(cipher, crypto::DIR_TO_SERVER, self.session, ctr, &msg.encode());
         let _ = self.sock.send_to(&pkt, addr);
     }
 }

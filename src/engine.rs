@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 
+use crate::audio::play::Player;
+use crate::audio::share::Sharer;
+use crate::audio::AudioSettings;
 use crate::client::{self, ClientHandle, ClientOptions};
 use crate::config::{ClientEntry, Config, Role, SwitchSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
@@ -27,7 +30,11 @@ enum Inner {
         server: Arc<Server>,
         capture: Option<CaptureHandle>,
     },
-    Client(Option<ClientHandle>),
+    Client {
+        handle: Option<ClientHandle>,
+        /// Sends this PC's sound (stopped before the client).
+        sharer: Option<Sharer>,
+    },
 }
 
 impl Engine {
@@ -49,6 +56,7 @@ impl Engine {
                         return Err(e.context("starting input capture"));
                     }
                 };
+                server.set_player(Some(Player::start(cfg.audio, Box::new(platform::open_speaker))));
                 log!("sharing this keyboard and mouse on UDP {}", cfg.port);
                 for c in &cfg.clients {
                     log!("  {} ({}) is {}", c.name, c.address, side_phrase(c.side));
@@ -67,11 +75,25 @@ impl Engine {
                     games: cfg.games.clone(),
                 };
                 let handle = client::start(sock, desktop, opts)?;
+                let sharer = match handle.audio_sender() {
+                    Ok(uplink) => Some(Sharer::start(
+                        cfg.audio,
+                        Box::new(uplink),
+                        Box::new(platform::open_loopback),
+                    )),
+                    Err(e) => {
+                        log!("can't send this PC's sound: {e:#}");
+                        None
+                    }
+                };
                 match cfg.server_address.as_deref().filter(|a| !a.trim().is_empty()) {
                     Some(a) => log!("waiting for the server at {a} (UDP {})", cfg.port),
                     None => log!("waiting for the server on UDP {}", cfg.port),
                 }
-                Inner::Client(Some(handle))
+                Inner::Client {
+                    handle: Some(handle),
+                    sharer,
+                }
             }
         };
         Ok(Engine { inner })
@@ -80,8 +102,15 @@ impl Engine {
     pub fn status(&self) -> EngineStatus {
         match &self.inner {
             Inner::Server { server, .. } => EngineStatus::Server(server.status()),
-            Inner::Client(Some(c)) => EngineStatus::Client(c.status()),
-            Inner::Client(None) => EngineStatus::Stopped,
+            Inner::Client {
+                handle: Some(c),
+                sharer,
+            } => {
+                let mut s = c.status();
+                s.sending_sound = s.connected && sharer.as_ref().is_some_and(Sharer::sending);
+                EngineStatus::Client(s)
+            }
+            Inner::Client { handle: None, .. } => EngineStatus::Stopped,
         }
     }
 
@@ -104,8 +133,18 @@ impl Engine {
     pub fn set_games(&self, games: crate::game::GameSettings) {
         match &self.inner {
             Inner::Server { server, .. } => server.set_games(games),
-            Inner::Client(Some(c)) => c.set_games(games),
-            Inner::Client(None) => {}
+            Inner::Client { handle: Some(c), .. } => c.set_games(games),
+            Inner::Client { handle: None, .. } => {}
+        }
+    }
+
+    /// Change sound settings live: playing them here (server), sending
+    /// this PC's (client).
+    pub fn set_audio(&self, settings: AudioSettings) {
+        match &self.inner {
+            Inner::Server { server, .. } => server.set_audio(settings),
+            Inner::Client { sharer: Some(s), .. } => s.set(settings),
+            Inner::Client { .. } => {}
         }
     }
 
@@ -177,7 +216,8 @@ impl Engine {
                     log!("stopped");
                 }
             }
-            Inner::Client(handle) => {
+            Inner::Client { handle, sharer } => {
+                drop(sharer.take());
                 if let Some(h) = handle.take() {
                     h.stop();
                     log!("stopped");

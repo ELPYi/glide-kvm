@@ -48,6 +48,13 @@ stay_on_this_pc = true
 # always = ["minecraft.exe"]   # count as games even when windowed
 # never = ["powerpnt.exe"]     # fullscreen apps that aren't games
 
+# The other PCs' sound, played on the sharing PC. Changes apply right away.
+[audio]
+play = true                # sharing PC: play the other PCs' sound here
+volume = 100               # sharing PC: how loud (0-100)
+share = true               # other PCs: send this PC's sound
+mute_while_sharing = true  # other PCs: mute their own speakers meanwhile
+
 # One block per PC you can move to. side = which edge of the server's
 # screens it sits beyond: left, right, top or bottom (one PC per side).
 [[clients]]

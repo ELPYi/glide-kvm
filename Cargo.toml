@@ -30,6 +30,9 @@ eframe = { version = "0.37", default-features = false, features = ["glow", "acce
 spake2 = "0.4"
 local-ip-address = "0.6"
 raw-window-handle = "0.6"
+# Opus (the codec Discord and Zoom use) for sharing sound: libopus
+# translated to Rust, so it builds without a C toolchain.
+unsafe-libopus = "0.2"
 
 # Tray icon: Windows and macOS for now. On Linux it needs GTK (or a
 # StatusNotifier implementation); add it with the Linux backend.
@@ -54,6 +57,18 @@ windows-sys = { version = "0.59", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
+] }
+# COM bindings for Windows audio (WASAPI), which windows-sys doesn't cover.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_Media_KernelStreaming",
+    "Win32_Media_Multimedia",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Threading",
 ] }
 
 [profile.release]

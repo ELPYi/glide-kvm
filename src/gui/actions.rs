@@ -1,6 +1,7 @@
 //! Everything the user can ask the app to do. Views push these; only
 //! [`App`](super::app::App) acts on them.
 
+use crate::audio::AudioSettings;
 use crate::config::Role;
 use crate::hotkey::Hotkey;
 use crate::input::Side;
@@ -58,6 +59,12 @@ pub enum Action {
     SetRunAsAdmin(bool),
     /// Turn automatic updates on/off (applies right away).
     SetAutoUpdate(bool),
+    /// Sound settings, applied right away. `save`: also write them to disk
+    /// (not on every step of a volume drag).
+    SetAudio {
+        settings: AudioSettings,
+        save: bool,
+    },
     CheckForUpdates,
 }
 

@@ -151,6 +151,10 @@ fn device_card(ui: &mut Ui, s: &ServerStatus, i: usize, p: &PeerStatus) {
                 _ => "Offline",
             };
             status_tag(ui, state, tone);
+            if p.sound {
+                ui.add_space(8.0);
+                status_tag(ui, "Sound", Tone::Muted);
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 latency(ui, p);
             });
@@ -286,6 +290,10 @@ fn client(ui: &mut Ui, m: &Model, c: &ClientStatus, local: &mut DevicesUi, actio
                 _ => "Not connected",
             };
             status_tag(ui, label, tone);
+            if c.sending_sound {
+                ui.add_space(8.0);
+                status_tag(ui, "Sound", Tone::Muted);
+            }
         });
         match (c.server, m.saved.server_address.as_deref()) {
             (Some(addr), _) if c.connected => hint(ui, &format!("Connected to {}", addr.ip())),

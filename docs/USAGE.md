@@ -73,6 +73,30 @@ where you come back in. The other PC hides its cursor when you leave it, and
 shows it again the moment its own mouse or touchpad moves. (Apps that draw
 their own custom cursor, such as some games, may still show theirs.)
 
+## Sound from the other PCs
+
+Everything the other PCs play (videos, music, calls, notifications) comes
+out of the sharing PC's speakers or headset, mixed with its own sound. It
+streams all the time, whichever PC you're on, about 70-80 ms behind (most of
+that is a small buffer that keeps Wi-Fi hiccups from crackling). That's
+unnoticeable for video, music and calls; you might notice it in rhythm games
+played on the other PC.
+
+While a PC is sending its sound, its own speakers are muted so you don't hear
+it twice. They're unmuted when glide stops or loses the sharing PC.
+
+The switches apply right away, no Save needed:
+
+- **On the sharing PC, Settings → Sound**: turn it off, or set how loud the
+  other PCs are (this PC's own volume is unchanged). The Devices tab shows
+  **Sound** next to a PC whose sound is playing.
+- **On another PC, Settings → Sound**: stop sending its sound, or keep its
+  speakers on while sending.
+
+It uses about 16 KB/s of network and a fraction of a percent of CPU, on its
+own threads, so the mouse is unaffected. Silence sends nothing. Both PCs need
+glide 0.4.7 or later.
+
 ## Command line
 
 `glide-cli.exe` runs without a window, for scripts or servers:

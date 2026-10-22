@@ -12,6 +12,8 @@
 //! fn prioritize_traffic(sock, dest) -> bool   // best-effort QoS tagging
 //! fn boost_latency_thread()          // CPU priority for hot threads
 //! fn http_get(url) -> Result<Vec<u8>>  // HTTPS download (updates)
+//! fn open_loopback(mute) -> Result<Box<dyn AudioIn>>  // what this PC plays
+//! fn open_speaker() -> Result<Box<dyn AudioOut>>   // play sound here
 //! fn raise_process_priority()
 //! mod system {
 //!     fn autostart_enabled() -> bool
@@ -123,22 +125,22 @@ mod unsupported;
 mod windows;
 #[cfg(windows)]
 pub use self::windows::{
-    boost_latency_thread, desktop, http_get, local_time, precise_sleep, prioritize_traffic, raise_process_priority,
-    selftest, start_capture, system,
+    boost_latency_thread, desktop, http_get, local_time, open_loopback, open_speaker, precise_sleep,
+    prioritize_traffic, raise_process_priority, selftest, start_capture, system,
 };
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 pub use self::linux::{
-    boost_latency_thread, desktop, http_get, local_time, precise_sleep, prioritize_traffic, raise_process_priority,
-    selftest, start_capture, system,
+    boost_latency_thread, desktop, http_get, local_time, open_loopback, open_speaker, precise_sleep,
+    prioritize_traffic, raise_process_priority, selftest, start_capture, system,
 };
 
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
 pub use self::macos::{
-    boost_latency_thread, desktop, http_get, local_time, precise_sleep, prioritize_traffic, raise_process_priority,
-    selftest, start_capture, system,
+    boost_latency_thread, desktop, http_get, local_time, open_loopback, open_speaker, precise_sleep,
+    prioritize_traffic, raise_process_priority, selftest, start_capture, system,
 };

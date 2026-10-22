@@ -12,6 +12,8 @@
 //! - `glide-srv-timer`: heartbeats, retransmits, liveness, pairing upkeep.
 //! - `glide-srv-dns`: resolving client addresses, kept off the hot path.
 //! - `glide-srv-game`: notices a game in focus (edges then don't switch).
+//! - sound from the other PCs is played by an [`audio::play::Player`]
+//!   (its own thread); `glide-srv-recv` only hands packets over.
 
 pub mod pacer;
 pub mod peer;
@@ -25,6 +27,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 
+use crate::audio::play::Player;
+use crate::audio::AudioSettings;
 use crate::config::{ClientEntry, Config, SwitchSettings};
 use crate::game::{self, GameSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
@@ -100,6 +104,8 @@ pub struct Server {
     /// Shared with capture: while set, mouse motion is swallowed locally.
     grab: Arc<AtomicBool>,
     games: Mutex<GameSettings>,
+    /// Plays the other PCs' sound (set by the engine; tests run without).
+    player: Mutex<Option<Player>>,
     desktop: Arc<dyn Desktop>,
     running: AtomicBool,
     threads: Mutex<Vec<JoinHandle<()>>>,
@@ -134,6 +140,7 @@ impl Server {
             recorded_hotkey: Mutex::new(None),
             grab: Arc::new(AtomicBool::new(false)),
             games: Mutex::new(cfg.games.clone()),
+            player: Mutex::new(None),
             desktop,
             running: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
@@ -156,6 +163,7 @@ impl Server {
 
     /// Stops the threads and hands input back to this machine.
     pub fn stop(&self) {
+        *self.player() = None;
         {
             let mut st = self.lock();
             if let Some(switch) = st.switcher.force_leave() {
@@ -175,9 +183,15 @@ impl Server {
 
     pub fn status(&self) -> ServerStatus {
         let st = self.lock();
+        let mut peers: Vec<_> = st.peers.iter().map(Peer::status).collect();
+        if let Some(player) = self.player().as_ref() {
+            for (p, s) in st.peers.iter().zip(peers.iter_mut()) {
+                s.sound = s.connected && p.addr.is_some_and(|a| player.playing_from(a));
+            }
+        }
         ServerStatus {
             port: self.port,
-            peers: st.peers.iter().map(Peer::status).collect(),
+            peers,
             active: st.switcher.active(),
             locked: st.switcher.locked(),
             game: st.game.clone(),
@@ -217,6 +231,26 @@ impl Server {
     /// Change the game rules live.
     pub fn set_games(&self, games: GameSettings) {
         *self.games.lock().unwrap() = games;
+    }
+
+    /// Play the other PCs' sound with `player` (`None`: don't ask for it).
+    pub fn set_player(&self, player: Option<Player>) {
+        *self.player() = player;
+    }
+
+    /// Change sound settings live (play on/off, volume).
+    pub fn set_audio(&self, settings: AudioSettings) {
+        if let Some(p) = self.player().as_ref() {
+            p.set(settings);
+        }
+    }
+
+    fn player(&self) -> MutexGuard<'_, Option<Player>> {
+        self.player.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn wants_sound(&self) -> bool {
+        self.player().as_ref().is_some_and(Player::wants_sound)
     }
 
     pub fn set_hotkeys(&self, hotkeys: Hotkeys) {
@@ -488,24 +522,8 @@ impl Server {
         if h.dir != crypto::DIR_TO_SERVER {
             return;
         }
-        let mut st = self.lock();
-        let Some(i) = st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
-            return;
-        };
-
         if h.session == crypto::KNOCK_SESSION {
-            // A client saying hello before it knows our session. Answer at once
-            // (no waiting for the next heartbeat) to the address it came from.
-            if crypto::open(&self.knock_cipher, &h, pkt).is_some() {
-                st.peers[i].addr = Some(src);
-                st.peers[i].last_heartbeat = Some(Instant::now());
-                self.send(
-                    src,
-                    &ServerMsg::Heartbeat {
-                        sent_micros: crate::now_micros(),
-                    },
-                );
-            }
+            self.handle_knock(&h, pkt, src);
             return;
         }
         if h.session != self.session {
@@ -515,7 +533,20 @@ impl Server {
             return;
         };
         let Some(msg) = ClientMsg::decode(&plain) else { return };
+        // Sound goes straight to the player, without taking the state lock
+        // the input hook uses. (It's authenticated; the player's per-sender
+        // sequence numbers drop replays and duplicates.)
+        if let ClientMsg::Audio { stream, seq, opus } = &msg {
+            if let Some(p) = self.player().as_ref() {
+                p.push(src, *stream, *seq, opus);
+            }
+            return;
+        }
 
+        let mut st = self.lock();
+        let Some(i) = st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
+            return;
+        };
         if let ClientMsg::Pong { instance, .. } = msg {
             if instance != st.peers[i].instance {
                 st.peers[i].reset_session(instance);
@@ -561,8 +592,30 @@ impl Server {
                     self.apply_switch(&mut st, switch);
                 }
             }
-            ClientMsg::Knock => {}
+            ClientMsg::Knock | ClientMsg::Audio { .. } => {}
         }
+    }
+
+    /// A client saying hello before it knows our session. Answer at once
+    /// (no waiting for the next heartbeat) to the address it came from.
+    fn handle_knock(&self, h: &crypto::Header, pkt: &[u8], src: SocketAddr) {
+        if crypto::open(&self.knock_cipher, h, pkt).is_none() {
+            return;
+        }
+        let wants_sound = self.wants_sound();
+        let mut st = self.lock();
+        let Some(p) = st.peers.iter_mut().find(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
+            return;
+        };
+        p.addr = Some(src);
+        p.last_heartbeat = Some(Instant::now());
+        self.send(
+            src,
+            &ServerMsg::Heartbeat {
+                sent_micros: crate::now_micros(),
+                wants_sound,
+            },
+        );
     }
 
     /// Sleeps until the next job is due (a heartbeat, a retransmission, a
@@ -586,6 +639,7 @@ impl Server {
         if self.pairing_upkeep(now) {
             next = next.min(now + PAIRING_TICK);
         }
+        let wants_sound = self.wants_sound();
         {
             let mut st = self.lock();
             for p in st.peers.iter_mut() {
@@ -603,6 +657,7 @@ impl Server {
                         addr,
                         &ServerMsg::Heartbeat {
                             sent_micros: crate::now_micros(),
+                            wants_sound,
                         },
                     );
                 }

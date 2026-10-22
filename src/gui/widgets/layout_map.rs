@@ -209,7 +209,7 @@ mod tests {
                 ..Default::default()
             };
             let mut moved = None;
-            let _ = ctx.run_ui(input, |ui| {
+            let mut output = ctx.run_ui(input, |ui| {
                 let origin = ui.cursor().min;
                 let width = ui.available_width().min(520.0);
                 center.set(Rect::from_center_size(
@@ -218,6 +218,8 @@ mod tests {
                 ));
                 moved = layout_map(ui, "This PC", Tone::Active, &devices, true);
             });
+            // No renderer to upload the font atlas to (debug builds assert on it).
+            output.textures_delta.clear();
             moved
         };
         let button = |pos, pressed| Event::PointerButton {

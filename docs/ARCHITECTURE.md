@@ -47,11 +47,16 @@ config, platform and networking together.
 | `src/input.rs` | OS-neutral events (keys are Linux evdev codes) | — |
 | `src/hotkey.rs` | **Pure** shortcuts: parse/display "Ctrl+Shift+L", exact matching, key names | — |
 | `src/status.rs` | Read-only snapshots for display | — |
+| `src/audio/mod.rs` | Sound from the other PCs: settings, device traits (`AudioIn`, `AudioOut`), `Uplink` | — |
+| `src/audio/codec.rs` | Opus encoder/decoder (10 ms frames, 128 kbps, low-delay mode) | `unsafe-libopus` |
+| `src/audio/playout.rs` | **Pure** jitter buffer: adaptive depth, loss concealment, clock-drift nudging | `codec` |
+| `src/audio/share.rs` | Client side: capture, cut into frames, encode, send; quiet during silence | `codec`, `Uplink` |
+| `src/audio/play.rs` | Server side: per-PC playout buffers, mixing, opening the speakers only while sound arrives | `playout` |
 | `src/update.rs` | Over-the-air updates from GitHub Releases: version compare, checksum, stage/swap files, background checker | `platform` (`http_get`) |
 | `src/logging.rs` | `log!` macro + in-memory log for the Logs tab | `platform` (clock) |
 | `src/platform/mod.rs` | The OS contract: `Desktop` trait, `start_capture`, `system` | — |
 | `src/platform/geometry.rs` | **Pure** monitor layout: outer-edge detection, entry points (multi-monitor, L-shaped) | `input` |
-| `src/platform/windows/` | Windows implementation, one file per concern: `capture`, `desktop`, `keymap`, `pointer` (speed/acceleration), `timing` (sub-ms sleep), `qos` (network priority), `http` (HTTPS via WinHTTP, for updates), `system`, `selftest` | Win32 |
+| `src/platform/windows/` | Windows implementation, one file per concern: `capture`, `desktop`, `keymap`, `pointer` (speed/acceleration), `timing` (sub-ms sleep), `qos` (network priority), `http` (HTTPS via WinHTTP, for updates), `audio` (WASAPI loopback + playback), `system`, `selftest` | Win32 |
 | `src/platform/{linux,macos}.rs` | Plans + stubs (`unsupported.rs`) | — |
 | `src/gui/` | The app; see [The app](#the-app-gui) | `engine`, `config`, `status` |
 
@@ -200,6 +205,32 @@ release of any key held *while crossing* reach the local machine.
 - **Only when idle.** Installing waits until there's been no input for a minute and this PC isn't
   controlling another, so an update never interrupts you mid-use.
 
+### Sound
+
+- **Capture**: WASAPI loopback on the client records what its default output plays, as 48 kHz
+  stereo float (Windows converts from the device's format). Loopback taps the mix *before* the
+  volume and mute are applied, which is what lets the client mute its own speakers and still
+  send everything.
+- **Transport**: `ClientMsg::Audio{stream, seq, opus}`, one 10 ms Opus frame per packet, over
+  the existing connection (a second socket would need a firewall rule on the server). The
+  server asks for sound with a byte appended to `Heartbeat`; older builds don't send it, which
+  reads as "no", so mixed versions keep working.
+- **Kept off the mouse's path**: audio runs on its own normal-priority threads
+  (`glide-audio-share`, `glide-audio-play`). On the server, `glide-srv-recv` decrypts an audio
+  packet and hands it to the player through a bounded channel *before* taking the state lock
+  the input hook uses. It flows client → server, the opposite direction to mouse packets.
+- **Playout** (`audio/playout.rs`): holds ~30 ms before playing, grows by 10 ms after a real
+  dropout (not when the sound simply ended), shrinks back after 30 s of steady play. A lost
+  packet is concealed by Opus; late ones are dropped. Clock drift between the two sound cards
+  is corrected by playing 0.2% faster or slower (linear interpolation) whenever the level
+  leaves a ±3 ms band around where it settled.
+- **Power**: the server opens its speakers only while sound is arriving and closes them 3 s
+  after it stops, so glide doesn't hold the audio device (or keep the PC awake) for nothing.
+  The client records only while connected and asked for sound, in event mode: its thread
+  wakes once per 10 ms chunk while sound plays and not at all during silence.
+- **Latency budget** (≈70-80 ms): capture chunk 10 ms, frame 10 ms, network a few ms, playout
+  ~30 ms, speaker queue ~15 ms, plus Windows' own engine buffering.
+
 ## Threads
 
 | Thread | Where | Job |
@@ -210,6 +241,8 @@ release of any key held *while crossing* reach the local machine.
 | `glide-srv-timer` | `server/mod.rs` | Heartbeats (25 ms connected / 200 ms searching), retransmits (30 ms), liveness, network priority, pairing upkeep |
 | `glide-srv-dns` | `server/mod.rs` | Resolving client addresses (can block) |
 | `glide-client` | `client/mod.rs` | Everything on the client (time-critical priority) |
+| `glide-audio-share` | `audio/share.rs` | Client: record, encode and send this PC's sound (normal priority) |
+| `glide-audio-play` | `audio/play.rs` | Server: decode, buffer, mix and play the other PCs' sound (normal priority) |
 | main | `gui` | The window; reads status 4×/s |
 
 Server state sits behind one `Mutex`. It's only ever held for microseconds
@@ -228,10 +261,10 @@ packet = [magic 'G'][dir][session u64][counter u64]  ++  ChaCha20-Poly1305(messa
 - **Key**: `SHA-256("glide-v1" ‖ secret ‖ session)`. Each server run picks a
   new `session` (its start time in µs), so keys rotate per run.
 - **Replay protection**: a 64-packet sliding window over `counter`.
-- **Server → client**: `Heartbeat{sent_micros}`, `Motion{dx,dy}` (unreliable),
+- **Server → client**: `Heartbeat{sent_micros, wants_sound}`, `Motion{dx,dy}` (unreliable),
   `Reliable{seq, Enter{side, frac, feel} | Leave | Input}`.
 - **Client → server**: `Pong{instance, echo_micros}` (gives RTT),
-  `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock`.
+  `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock`, `Audio{stream, seq, opus}`.
 - **Knock / firewall**: a client with `server_address` set sends `Knock`
   (sealed with session 0) every 500 ms until connected. Its firewall then
   treats the server's packets as replies, so **no inbound rule is needed**.

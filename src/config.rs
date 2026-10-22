@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::audio::AudioSettings;
 use crate::game::GameSettings;
 use crate::hotkey::Hotkeys;
 use crate::input::Side;
@@ -68,6 +69,9 @@ pub struct Config {
     /// Don't switch PCs while a game is in focus (on whichever PC it runs).
     #[serde(default)]
     pub games: GameSettings,
+    /// The other PCs' sound, played on the sharing PC.
+    #[serde(default)]
+    pub audio: AudioSettings,
     /// Server only: the machines it can hand input to.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clients: Vec<ClientEntry>,
@@ -145,6 +149,7 @@ impl Config {
             switching: SwitchSettings::default(),
             hotkeys: Hotkeys::default(),
             games: GameSettings::default(),
+            audio: AudioSettings::default(),
             clients: Vec::new(),
         }
     }
@@ -306,6 +311,12 @@ mod tests {
         assert_eq!(c.hotkeys.lock.to_string(), "Ctrl+Shift+L");
         let custom = Config::parse("secret = \"0123456789abcdef\"\n[hotkeys]\nlock = \"F13\"\n").unwrap();
         assert_eq!(custom.hotkeys.lock.to_string(), "F13", "a custom choice is kept");
+    }
+
+    #[test]
+    fn the_example_file_parses() {
+        let c = Config::parse(include_str!("../glide.example.toml")).unwrap();
+        assert_eq!(c.audio, crate::audio::AudioSettings::default());
     }
 
     #[test]

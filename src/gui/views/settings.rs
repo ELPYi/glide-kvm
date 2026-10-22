@@ -41,6 +41,7 @@ pub fn show(ui: &mut Ui, m: &Model, draft: &mut Config, local: &mut SettingsUi, 
             card(ui, |ui| switching(ui, draft));
             card(ui, |ui| shortcuts(ui, m, actions));
         }
+        card(ui, |ui| sound(ui, m, role, actions));
         card(ui, |ui| gaming(ui, m, draft, local));
         card(ui, |ui| startup(ui, m, draft, actions));
         card(ui, |ui| updates(ui, m, actions));
@@ -179,6 +180,76 @@ fn devices(ui: &mut Ui, draft: &mut Config) {
                 side,
             });
         }
+    }
+}
+
+/// Applies right away (no Save), like the other on/off switches people
+/// reach for mid-use.
+fn sound(ui: &mut Ui, m: &Model, role: Role, actions: &mut Actions) {
+    use crate::status::EngineStatus;
+    section_title(ui, "Sound");
+    let mut a = m.saved.audio;
+    let before = a;
+    // A volume drag applies live on every step and is saved when let go.
+    let (mut dragging, mut let_go) = (false, false);
+    if role == Role::Server {
+        field(
+            ui,
+            "Other PCs' sound",
+            Some("Everything the other PCs play (videos, music, calls, notifications) comes out of this PC's speakers or headset, a few hundredths of a second later."),
+            |ui| {
+                ui.checkbox(&mut a.play, "Play the other PCs' sound on this PC");
+                if let EngineStatus::Server(s) = m.status {
+                    let playing: Vec<&str> = s.peers.iter().filter(|p| p.sound).map(|p| p.name.as_str()).collect();
+                    if a.play && !playing.is_empty() {
+                        ui.label(
+                            RichText::new(format!("Playing sound from {} now", playing.join(", ")))
+                                .color(theme::color(ui, Tone::Active)),
+                        );
+                    }
+                }
+            },
+        );
+        if a.play {
+            field(
+                ui,
+                "Volume",
+                Some("Their sound only; this PC's own volume is unchanged."),
+                |ui| {
+                    let r = ui.add(Slider::new(&mut a.volume, 0..=100).suffix("%"));
+                    dragging = r.dragged();
+                    let_go = r.drag_stopped();
+                },
+            );
+        }
+    } else {
+        field(
+            ui,
+            "This PC's sound",
+            Some("Everything this PC plays is sent to the sharing PC and comes out of its speakers or headset. The sharing PC can turn this off too."),
+            |ui| {
+                ui.checkbox(&mut a.share, "Send this PC's sound to the sharing PC");
+                if let EngineStatus::Client(c) = m.status {
+                    if a.share && c.sending_sound {
+                        ui.label(RichText::new("Sending now").color(theme::color(ui, Tone::Active)));
+                    }
+                }
+            },
+        );
+        if a.share {
+            field(
+                ui,
+                "Speakers",
+                Some("So you don't hear it twice. Only while sending; they're unmuted when glide stops or loses the sharing PC."),
+                |ui| ui.checkbox(&mut a.mute_while_sharing, "Mute this PC's speakers while sending"),
+            );
+        }
+    }
+    if a != before || let_go {
+        actions.push(Action::SetAudio {
+            settings: a,
+            save: !dragging,
+        });
     }
 }
 
