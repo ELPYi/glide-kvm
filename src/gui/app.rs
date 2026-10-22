@@ -295,6 +295,7 @@ impl App {
                 }
             }
             Action::CheckForUpdates => self.updater.check_now(),
+            Action::InstallUpdate => self.updater.install_now(),
             Action::SetAudio { settings, save } => {
                 self.saved.audio = settings;
                 self.draft.audio = settings;

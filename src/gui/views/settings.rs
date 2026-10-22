@@ -452,7 +452,7 @@ fn updates(ui: &mut Ui, m: &Model, actions: &mut Actions) {
     field(
         ui,
         "Automatic updates",
-        Some("New versions download in the background and install the next time you step away for a minute. glide restarts by itself; nothing to click."),
+        Some("New versions download in the background and install the next time you step away for a minute. glide restarts by itself, or press Install now once one is ready."),
         |ui| {
             let mut on = m.saved.auto_update;
             if ui
@@ -478,7 +478,15 @@ fn updates(ui: &mut Ui, m: &Model, actions: &mut Actions) {
             }
             let can_check =
                 release && m.saved.auto_update && !busy && !matches!(m.update, UpdateState::ReadyToInstall(_));
-            if ui.add_enabled(can_check, egui::Button::new("Check now")).clicked() {
+            if let UpdateState::ReadyToInstall(_) = m.update {
+                if ui
+                    .button("Install now")
+                    .on_hover_text("glide restarts into the new version (takes a few seconds)")
+                    .clicked()
+                {
+                    actions.push(Action::InstallUpdate);
+                }
+            } else if ui.add_enabled(can_check, egui::Button::new("Check now")).clicked() {
                 actions.push(Action::CheckForUpdates);
             }
         })

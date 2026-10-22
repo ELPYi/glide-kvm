@@ -28,8 +28,9 @@ in the background and verifies its checksum. It installs the next time you
 leave the PC alone for a minute, and never while you're controlling another PC.
 glide restarts itself and shows **glide updated to …** on screen.
 
-**Settings → Updates** shows the version, has **Check now**, and can turn
-automatic updates off. Copies you build yourself are "dev" builds and never
+**Settings → Updates** shows the version, has **Check now** (and
+**Install now** once an update is downloaded, to restart into it straight
+away), and can turn automatic updates off. Copies you build yourself are "dev" builds and never
 update themselves.
 
 ## Shortcuts and switching

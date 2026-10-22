@@ -71,6 +71,8 @@ pub enum Action {
         save: bool,
     },
     CheckForUpdates,
+    /// Install the downloaded update now (glide restarts).
+    InstallUpdate,
 }
 
 /// Collects actions emitted while drawing a frame.

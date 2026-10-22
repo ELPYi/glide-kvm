@@ -137,7 +137,7 @@ impl UpdateState {
             UpdateState::Checking => "Checking for updates...".into(),
             UpdateState::UpToDate => "Up to date".into(),
             UpdateState::Downloading(v) => format!("Downloading {v}..."),
-            UpdateState::ReadyToInstall(v) => format!("{v} is ready; installs when you're away for a minute"),
+            UpdateState::ReadyToInstall(v) => format!("{v} is ready; installs when you're away for a minute, or now"),
             UpdateState::Failed(e) => format!("Update check failed: {e}"),
         }
     }
@@ -156,6 +156,8 @@ pub struct UpdaterOptions {
 pub struct Updater {
     state: Mutex<UpdateState>,
     check_now: AtomicBool,
+    /// Install the downloaded version without waiting for idle.
+    install_now: AtomicBool,
     enabled: AtomicBool,
 }
 
@@ -166,6 +168,11 @@ impl Updater {
 
     pub fn check_now(&self) {
         self.check_now.store(true, Ordering::Relaxed);
+    }
+
+    /// Install the downloaded update right away (glide restarts).
+    pub fn install_now(&self) {
+        self.install_now.store(true, Ordering::Relaxed);
     }
 
     pub fn set_enabled(&self, on: bool) {
@@ -198,6 +205,7 @@ pub fn start(opts: UpdaterOptions) -> Arc<Updater> {
     let updater = Arc::new(Updater {
         state: Mutex::new(initial),
         check_now: AtomicBool::new(false),
+        install_now: AtomicBool::new(false),
         enabled: AtomicBool::new(opts.enabled),
     });
     if release {
@@ -216,7 +224,8 @@ fn run(u: &Updater, opts: &UpdaterOptions) {
         std::thread::sleep(TICK);
         let enabled = u.enabled.load(Ordering::Relaxed);
         if let Some(version) = &ready {
-            if enabled && (opts.is_idle)() {
+            let asked = u.install_now.swap(false, Ordering::Relaxed);
+            if enabled && (asked || (opts.is_idle)()) {
                 match install_all(&opts.dir) {
                     Ok(()) => {
                         log!("installed {version}; restarting");
