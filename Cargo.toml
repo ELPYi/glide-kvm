@@ -40,6 +40,8 @@ unsafe-libopus = "0.2"
 tray-icon = "0.26"
 
 [target.'cfg(windows)'.dependencies]
+# For implementing a COM callback (`#[implement]` expands to `windows_core::`).
+windows-core = "0.62"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -69,6 +71,7 @@ windows = { version = "0.62", features = [
     "Win32_System_Com",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Threading",
+    "Win32_System_Variant",
 ] }
 
 [profile.release]

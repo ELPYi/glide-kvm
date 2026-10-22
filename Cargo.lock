@@ -1681,6 +1681,7 @@ dependencies = [
  "tray-icon",
  "unsafe-libopus",
  "windows",
+ "windows-core",
  "windows-sys 0.59.0",
 ]
 

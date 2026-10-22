@@ -1,9 +1,11 @@
 //! Sound devices via WASAPI, Windows' own audio API.
 //!
-//! - [`Loopback`]: what this PC is playing, captured on its way to the
-//!   default speakers/headset (the same mechanism recording apps use).
-//!   It can mute the speakers meanwhile: loopback hears the sound before
-//!   the volume and mute are applied, so it still gets everything.
+//! - [`Loopback`]: what this PC is playing. It records every app's sound
+//!   directly (Windows' per-app capture, Windows 10 2004+), which the
+//!   speakers' mute and volume can't touch, so it can mute the speakers
+//!   meanwhile. Older Windows: captured on its way to the default speakers
+//!   instead, which on most PCs is also before the mute (but not all: some
+//!   drivers' sound effects apply the mute first).
 //! - [`Speaker`]: plays sound on the default speakers/headset.
 //!
 //! Both use 48 kHz stereo float and let Windows convert to and from the
@@ -13,19 +15,25 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use windows::core::PWSTR;
+use windows::core::{implement, Interface, HRESULT, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
-    eConsole, eRender, IAudioCaptureClient, IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM,
-    AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
-    WAVEFORMATEX, WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
+    eConsole, eRender, ActivateAudioInterfaceAsync, IActivateAudioInterfaceAsyncOperation,
+    IActivateAudioInterfaceCompletionHandler, IActivateAudioInterfaceCompletionHandler_Impl, IAudioCaptureClient,
+    IAudioClient, IAudioRenderClient, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+    AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, AUDIOCLIENT_ACTIVATION_PARAMS,
+    AUDIOCLIENT_ACTIVATION_PARAMS_0, AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK, AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS,
+    PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE, VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE, WAVEFORMATEXTENSIBLE_0,
 };
 use windows::Win32::Media::KernelStreaming::WAVE_FORMAT_EXTENSIBLE;
 use windows::Win32::Media::Multimedia::KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
+use windows::Win32::System::Com::StructuredStorage::PROPVARIANT;
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED};
-use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
+use windows::Win32::System::Threading::{CreateEventW, SetEvent, WaitForSingleObject};
+use windows::Win32::System::Variant::VT_BLOB;
 
 use crate::audio::{AudioIn, AudioOut, CHANNELS, SAMPLE_RATE};
 use crate::log;
@@ -91,8 +99,12 @@ fn changed_from(id: &str) -> bool {
 }
 
 fn init(device: &IMMDevice, flags: u32, buffer: i64) -> Result<IAudioClient> {
+    let client: IAudioClient = unsafe { device.Activate(CLSCTX_ALL, None)? };
+    init_client(client, flags, buffer)
+}
+
+fn init_client(client: IAudioClient, flags: u32, buffer: i64) -> Result<IAudioClient> {
     unsafe {
-        let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
         let fmt = format();
         client
             .Initialize(
@@ -105,6 +117,83 @@ fn init(device: &IMMDevice, flags: u32, buffer: i64) -> Result<IAudioClient> {
             )
             .context("the sound device refused the stream")?;
         Ok(client)
+    }
+}
+
+/// A PROPVARIANT holding a blob (the `windows` crate's own type is a
+/// nest of unions); same layout.
+#[repr(C)]
+struct BlobVariant {
+    vt: u16,
+    reserved: [u16; 3],
+    size: u32,
+    data: *const u8,
+}
+
+/// Tells the waiting thread that Windows has finished activating.
+#[implement(IActivateAudioInterfaceCompletionHandler)]
+struct Activated(HANDLE);
+
+impl IActivateAudioInterfaceCompletionHandler_Impl for Activated_Impl {
+    fn ActivateCompleted(
+        &self,
+        _op: windows::core::Ref<IActivateAudioInterfaceAsyncOperation>,
+    ) -> windows::core::Result<()> {
+        unsafe { SetEvent(self.0) }
+    }
+}
+
+/// Windows' per-app capture: every app's sound except process `exclude`'s
+/// (and its children's), taken before it reaches any speakers, so the
+/// speakers' mute, volume and sound effects don't affect it. Event mode.
+fn open_app_capture(exclude: u32) -> Result<(IAudioClient, HANDLE)> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let params = AUDIOCLIENT_ACTIVATION_PARAMS {
+            ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
+            Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
+                ProcessLoopbackParams: AUDIOCLIENT_PROCESS_LOOPBACK_PARAMS {
+                    TargetProcessId: exclude,
+                    ProcessLoopbackMode: PROCESS_LOOPBACK_MODE_EXCLUDE_TARGET_PROCESS_TREE,
+                },
+            },
+        };
+        let blob = BlobVariant {
+            vt: VT_BLOB.0,
+            reserved: [0; 3],
+            size: size_of_val(&params) as u32,
+            data: &params as *const AUDIOCLIENT_ACTIVATION_PARAMS as *const u8,
+        };
+        let done = CreateEventW(None, false, false, None)?;
+        let activated = (|| -> Result<IAudioClient> {
+            let handler: IActivateAudioInterfaceCompletionHandler = Activated(done).into();
+            let op = ActivateAudioInterfaceAsync(
+                VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+                &IAudioClient::IID,
+                Some(&blob as *const BlobVariant as *const PROPVARIANT),
+                &handler,
+            )?;
+            if WaitForSingleObject(done, 5000) != WAIT_OBJECT_0 {
+                anyhow::bail!("Windows didn't start per-app capture");
+            }
+            let mut hr = HRESULT(0);
+            let mut unknown = None;
+            op.GetActivateResult(&mut hr, &mut unknown)?;
+            hr.ok()?;
+            Ok(unknown.context("no audio client")?.cast()?)
+        })();
+        let _ = CloseHandle(done);
+        let client = init_client(
+            activated?,
+            AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            CAPTURE_BUFFER,
+        )?;
+        let event = CreateEventW(None, false, false, None)?;
+        if let Err(e) = client.SetEventHandle(event) {
+            let _ = CloseHandle(event);
+            return Err(e.into());
+        }
+        Ok((client, event))
     }
 }
 
@@ -125,31 +214,18 @@ pub struct Loopback {
 impl Loopback {
     /// `mute`: silence this PC's speakers while capturing.
     pub fn open(mute: bool) -> Result<Loopback> {
+        Self::open_excluding(mute, std::process::id())
+    }
+
+    /// Records every app's sound but `exclude`'s (glide itself, normally).
+    fn open_excluding(mute: bool, exclude: u32) -> Result<Loopback> {
         let (device, id) = default_output()?;
-        // Event mode: the thread sleeps until sound is ready, and right
-        // through silence (no wake-ups at all while nothing plays).
-        let evented = unsafe { CreateEventW(None, false, false, None) }
-            .ok()
-            .and_then(|event| {
-                let client = init(
-                    &device,
-                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-                    CAPTURE_BUFFER,
-                )
-                .and_then(|c| unsafe { c.SetEventHandle(event) }.map(|_| c).map_err(Into::into));
-                match client {
-                    Ok(c) => Some((c, event)),
-                    Err(_) => {
-                        unsafe {
-                            let _ = CloseHandle(event);
-                        }
-                        None
-                    }
-                }
-            });
-        let (client, event) = match evented {
-            Some((c, e)) => (c, Some(e)),
-            None => (init(&device, AUDCLNT_STREAMFLAGS_LOOPBACK, CAPTURE_BUFFER)?, None),
+        let (client, event) = match open_app_capture(exclude) {
+            Ok((c, e)) => (c, Some(e)),
+            Err(e) => {
+                log!("per-app sound capture isn't available ({e:#}); recording the speakers' output instead");
+                Self::open_endpoint(&device)?
+            }
         };
         let mut lb = Loopback {
             capture: unsafe { client.GetService()? },
@@ -174,6 +250,35 @@ impl Loopback {
             }
         }
         Ok(lb)
+    }
+
+    /// Fallback: capture on the way to the default speakers.
+    fn open_endpoint(device: &IMMDevice) -> Result<(IAudioClient, Option<HANDLE>)> {
+        // Event mode: the thread sleeps until sound is ready, and right
+        // through silence (no wake-ups at all while nothing plays).
+        let evented = unsafe { CreateEventW(None, false, false, None) }
+            .ok()
+            .and_then(|event| {
+                let client = init(
+                    device,
+                    AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+                    CAPTURE_BUFFER,
+                )
+                .and_then(|c| unsafe { c.SetEventHandle(event) }.map(|_| c).map_err(Into::into));
+                match client {
+                    Ok(c) => Some((c, event)),
+                    Err(_) => {
+                        unsafe {
+                            let _ = CloseHandle(event);
+                        }
+                        None
+                    }
+                }
+            });
+        Ok(match evented {
+            Some((c, e)) => (c, Some(e)),
+            None => (init(device, AUDCLNT_STREAMFLAGS_LOOPBACK, CAPTURE_BUFFER)?, None),
+        })
     }
 
     /// Mute the speakers if they aren't. Something else can unmute them
@@ -330,6 +435,20 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    /// Some process other than this one (the test plays from this one).
+    fn other_process() -> u32 {
+        let mut child = std::process::Command::new("cmd").args(["/c", "exit"]).spawn().unwrap();
+        let id = child.id();
+        let _ = child.wait();
+        id
+    }
+
+    #[test]
+    #[ignore = "uses the real sound device"]
+    fn per_app_capture_is_available() {
+        open_app_capture(std::process::id()).unwrap();
+    }
+
     fn set_muted(on: bool) {
         let (device, _) = default_output().unwrap();
         let vol: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None).unwrap() };
@@ -350,7 +469,7 @@ mod tests {
     fn loopback_hears_what_this_pc_plays_even_muted() {
         let was_muted = muted_now();
         let mut speaker = Speaker::open().unwrap();
-        let mut loopback = Loopback::open(true).unwrap();
+        let mut loopback = Loopback::open_excluding(true, other_process()).unwrap();
         assert!(loopback.event.is_some(), "event mode (sleeps through silence)");
         assert!(muted_now(), "speakers muted while capturing");
         // Something else unmutes them: muted again on the next check.

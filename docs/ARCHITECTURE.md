@@ -207,10 +207,11 @@ release of any key held *while crossing* reach the local machine.
 
 ### Sound
 
-- **Capture**: WASAPI loopback on the client records what its default output plays, as 48 kHz
-  stereo float (Windows converts from the device's format). Loopback taps the mix *before* the
-  volume and mute are applied, which is what lets the client mute its own speakers and still
-  send everything.
+- **Capture**: Windows' per-app capture (process loopback, Windows 10 2004+) records every
+  app's sound except glide's own, as 48 kHz stereo float. It taps the apps' streams before they
+  reach any speakers, so the client can mute its own speakers and still send everything. The
+  older endpoint loopback (fallback) taps the speakers' mix, which on most PCs is also before the
+  mute, but some drivers' sound effects apply the mute first and it then records silence.
 - **Transport**: `ClientMsg::Audio{stream, seq, opus}`, one 10 ms Opus frame per packet, over
   the existing connection (a second socket would need a firewall rule on the server). The
   server asks for sound with a byte appended to `Heartbeat`; older builds don't send it, which
