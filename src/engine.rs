@@ -148,6 +148,13 @@ impl Engine {
         }
     }
 
+    /// Mute or unmute one device's sound on this PC (server only).
+    pub fn set_device_muted(&self, index: usize, muted: bool) {
+        if let Inner::Server { server, .. } = &self.inner {
+            server.set_device_muted(index, muted);
+        }
+    }
+
     /// Change shortcuts live (server only).
     pub fn set_hotkeys(&self, hotkeys: Hotkeys) {
         if let Inner::Server { server, .. } = &self.inner {

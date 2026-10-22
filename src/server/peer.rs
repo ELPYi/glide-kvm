@@ -83,6 +83,7 @@ impl Peer {
             name: self.entry.name.clone(),
             address: self.entry.address.clone(),
             side: self.entry.side,
+            muted: self.entry.muted,
             resolved: self.addr,
             connected,
             rtt_ms: self.rtt.median().filter(|_| connected),
@@ -137,6 +138,7 @@ mod tests {
             name: "x".into(),
             address: "x".into(),
             side: Side::Left,
+            muted: false,
         })
     }
 

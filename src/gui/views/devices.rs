@@ -131,11 +131,11 @@ fn server(ui: &mut Ui, m: &Model, s: &ServerStatus, local: &mut DevicesUi, actio
     }
 
     for (i, p) in s.peers.iter().enumerate() {
-        device_card(ui, s, i, p);
+        device_card(ui, m, s, i, p, actions);
     }
 }
 
-fn device_card(ui: &mut Ui, s: &ServerStatus, i: usize, p: &PeerStatus) {
+fn device_card(ui: &mut Ui, m: &Model, s: &ServerStatus, i: usize, p: &PeerStatus, actions: &mut Actions) {
     let tone = peer_tone(s, i, p);
     card_with(ui, (tone == Tone::Active).then_some(Tone::Active), |ui| {
         ui.horizontal(|ui| {
@@ -151,11 +151,32 @@ fn device_card(ui: &mut Ui, s: &ServerStatus, i: usize, p: &PeerStatus) {
                 _ => "Offline",
             };
             status_tag(ui, state, tone);
-            if p.sound {
+            if p.muted {
+                ui.add_space(8.0);
+                status_tag(ui, "Muted", Tone::Muted);
+            } else if p.sound {
                 ui.add_space(8.0);
                 status_tag(ui, "Sound", Tone::Muted);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Only offered while its sound would play here at all.
+                if m.saved.audio.play {
+                    let (label, tip) = if p.muted {
+                        ("Unmute", "Play this PC's sound here again")
+                    } else {
+                        (
+                            "Mute",
+                            "Silence this PC's sound. It stays silent; its own speakers stay muted too.",
+                        )
+                    };
+                    if ui.small_button(label).on_hover_text(tip).clicked() {
+                        actions.push(Action::SetDeviceMuted {
+                            index: i,
+                            muted: !p.muted,
+                        });
+                    }
+                    ui.add_space(6.0);
+                }
                 latency(ui, p);
             });
         });

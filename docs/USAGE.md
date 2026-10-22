@@ -90,6 +90,9 @@ The switches apply right away, no Save needed:
 - **On the sharing PC, Settings → Sound**: turn it off, or set how loud the
   other PCs are (this PC's own volume is unchanged). The Devices tab shows
   **Sound** next to a PC whose sound is playing.
+- **One PC only, on the sharing PC's Devices tab**: **Mute** silences that
+  PC's sound (it stays silent: its own speakers stay muted too); **Unmute**
+  brings it back. Remembered across restarts.
 - **On another PC, Settings → Sound**: stop sending its sound, or keep its
   speakers on while sending.
 

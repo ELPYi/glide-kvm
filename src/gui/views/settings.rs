@@ -178,6 +178,7 @@ fn devices(ui: &mut Ui, draft: &mut Config) {
                 name: format!("PC {}", draft.clients.len() + 2),
                 address: String::new(),
                 side,
+                muted: false,
             });
         }
     }

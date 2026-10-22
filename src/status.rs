@@ -48,6 +48,8 @@ pub struct PeerStatus {
     /// As written in the config.
     pub address: String,
     pub side: Side,
+    /// Its sound is muted here (Devices tab).
+    pub muted: bool,
     /// Where packets are actually going, once resolved.
     pub resolved: Option<SocketAddr>,
     pub connected: bool,

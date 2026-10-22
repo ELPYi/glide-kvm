@@ -195,3 +195,93 @@ fn sound_does_not_slow_the_mouse() {
     eprintln!("mouse, with sound: p50 {sound50:?}  p99 {sound99:?}");
     assert!(sound50 < quiet50 * 2 + Duration::from_micros(50));
 }
+
+/// Typing while sound streams: every key arrives, in order.
+#[test]
+fn typing_works_while_sound_streams() {
+    let p = connected_pair(SwitchSettings::default());
+    let client = p.client.as_ref().unwrap();
+    p.server.set_player(Some(Player::start(
+        AudioSettings::default(),
+        Box::new(|| {
+            Ok(Box::new(RecordingOut {
+                heard: Arc::new(Mutex::new(Vec::new())),
+                since: Instant::now(),
+                end: 0,
+            }) as Box<dyn AudioOut>)
+        }),
+    )));
+    let _sharer = Sharer::start(
+        AudioSettings::default(),
+        Box::new(client.audio_sender().unwrap()),
+        Box::new(|_mute| {
+            Ok(Box::new(ToneIn {
+                since: Instant::now(),
+                made: 0,
+            }) as Box<dyn AudioIn>)
+        }),
+    );
+    wait_for("sound flowing", || p.server.status().peers[0].sound);
+    p.server.on_captured(Captured::Edge(EdgeHit {
+        side: Side::Right,
+        frac: 0.5,
+    }));
+    wait_for("enter", || client.status().active);
+
+    p.client_desk.clear();
+    let mut sent = Vec::new();
+    for i in 0..400u16 {
+        let code = 16 + i % 20; // letters
+        for down in [true, false] {
+            let ev = glide::input::InputEvent::Key { code, down };
+            assert!(p.server.on_captured(Captured::Input(ev)), "swallowed on the sharing PC");
+            sent.push(ev);
+        }
+        std::thread::sleep(Duration::from_millis(3));
+    }
+    wait_for("every key", || p.client_desk.events().len() >= sent.len());
+    assert_eq!(p.client_desk.events(), sent);
+    assert!(p.server.status().peers[0].sound, "sound still flowing");
+}
+
+/// Muting a device on the sharing PC silences it; unmuting brings it back.
+#[test]
+fn a_device_can_be_muted_from_the_sharing_pc() {
+    let p = connected_pair(SwitchSettings::default());
+    let client = p.client.as_ref().unwrap();
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let h = heard.clone();
+    p.server.set_player(Some(Player::start(
+        AudioSettings::default(),
+        Box::new(move || {
+            Ok(Box::new(RecordingOut {
+                heard: h.clone(),
+                since: Instant::now(),
+                end: 0,
+            }) as Box<dyn AudioOut>)
+        }),
+    )));
+    let _sharer = Sharer::start(
+        AudioSettings::default(),
+        Box::new(client.audio_sender().unwrap()),
+        Box::new(|_mute| {
+            Ok(Box::new(ToneIn {
+                since: Instant::now(),
+                made: 0,
+            }) as Box<dyn AudioIn>)
+        }),
+    );
+    wait_for("sound playing", || p.server.status().peers[0].sound);
+
+    p.server.set_device_muted(0, true);
+    assert!(p.server.status().peers[0].muted);
+    wait_for("muted", || !p.server.status().peers[0].sound);
+    std::thread::sleep(Duration::from_millis(300)); // let what was buffered finish
+    heard.lock().unwrap().clear();
+    std::thread::sleep(Duration::from_millis(300));
+    let loud = heard.lock().unwrap().iter().filter(|s| s.abs() > 0.05).count();
+    assert_eq!(loud, 0, "nothing from the muted PC");
+
+    p.server.set_device_muted(0, false);
+    wait_for("playing again", || p.server.status().peers[0].sound);
+}

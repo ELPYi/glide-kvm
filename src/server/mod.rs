@@ -245,6 +245,28 @@ impl Server {
         }
     }
 
+    /// Mute (or unmute) device `index`'s sound here.
+    pub fn set_device_muted(&self, index: usize, muted: bool) {
+        let mut st = self.lock();
+        if let Some(p) = st.peers.get_mut(index) {
+            p.entry.muted = muted;
+        }
+        self.sync_muted(&st);
+    }
+
+    /// Tell the player which devices are muted, by their current address.
+    fn sync_muted(&self, st: &State) {
+        if let Some(player) = self.player().as_ref() {
+            let ips = st
+                .peers
+                .iter()
+                .filter(|p| p.entry.muted)
+                .filter_map(|p| p.addr.map(|a| a.ip()))
+                .collect();
+            player.set_muted(ips);
+        }
+    }
+
     fn player(&self) -> MutexGuard<'_, Option<Player>> {
         self.player.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -358,7 +380,12 @@ impl Server {
         } else {
             src.to_string()
         };
-        let entry = ClientEntry { name, address, side };
+        let entry = ClientEntry {
+            name,
+            address,
+            side,
+            muted: false,
+        };
         log!(
             "paired with {} ({}), placed {}",
             entry.name,
@@ -680,6 +707,8 @@ impl Server {
                     }
                 }
             }
+            // Addresses can change (DHCP, roaming); keep mutes pointed right.
+            self.sync_muted(&st);
             if st.switcher.active().is_some_and(|i| !st.peers[i].alive()) {
                 log!("lost the active device; taking input back");
                 if let Some(switch) = st.switcher.force_leave() {

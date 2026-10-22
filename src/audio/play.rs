@@ -8,7 +8,7 @@
 //! audio device (and the PC) awake for nothing.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::sync::{Arc, Mutex};
@@ -42,6 +42,8 @@ struct Shared {
     gain: AtomicU32,
     /// PCs whose sound is playing right now (for the UI).
     playing: Mutex<Vec<SocketAddr>>,
+    /// PCs muted from the Devices tab: their packets are dropped on arrival.
+    muted: Mutex<Vec<IpAddr>>,
 }
 
 pub struct Player {
@@ -58,6 +60,7 @@ impl Player {
             enabled: AtomicBool::new(settings.play),
             gain: AtomicU32::new(settings.gain().to_bits()),
             playing: Mutex::new(Vec::new()),
+            muted: Mutex::new(Vec::new()),
         });
         let running = Arc::new(AtomicBool::new(true));
         let (s, r) = (shared.clone(), running.clone());
@@ -83,9 +86,23 @@ impl Player {
         self.shared.gain.store(settings.gain().to_bits(), Ordering::Relaxed);
     }
 
+    /// Don't play sound from these PCs (the rest play as usual).
+    pub fn set_muted(&self, ips: Vec<IpAddr>) {
+        let mut m = self.shared.muted.lock().unwrap_or_else(|e| e.into_inner());
+        if *m != ips {
+            *m = ips;
+        }
+    }
+
     /// One packet from `from`. Called on the network thread: never blocks.
     pub fn push(&self, from: SocketAddr, stream: u32, seq: u32, opus: &[u8]) {
-        if self.wants_sound() {
+        let muted = self
+            .shared
+            .muted
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&from.ip());
+        if self.wants_sound() && !muted {
             let _ = self.tx.try_send(Packet {
                 from,
                 stream,

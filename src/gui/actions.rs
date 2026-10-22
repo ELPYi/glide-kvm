@@ -45,6 +45,11 @@ pub enum Action {
         address: String,
         code: String,
     },
+    /// Mute / unmute a device's sound on this PC (applies right away).
+    SetDeviceMuted {
+        index: usize,
+        muted: bool,
+    },
     /// Dragged on the layout map. Swaps with whatever was on `side`.
     MoveDevice {
         index: usize,

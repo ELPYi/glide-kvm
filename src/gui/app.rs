@@ -303,6 +303,17 @@ impl App {
                     self.save();
                 }
             }
+            Action::SetDeviceMuted { index, muted } => {
+                if let Some(c) = self.saved.clients.get_mut(index) {
+                    c.muted = muted;
+                    if let Some(d) = self.draft.clients.get_mut(index) {
+                        d.muted = muted;
+                    }
+                    if self.save() {
+                        self.engine.with(|e| e.set_device_muted(index, muted));
+                    }
+                }
+            }
             Action::MoveDevice { index, side } => {
                 if move_device(&mut self.saved.clients, index, side) && self.save() {
                     // Keep the settings draft's sides in step (names/addresses untouched).
@@ -712,6 +723,7 @@ pub fn needs_restart(old: &Config, new: &Config) -> bool {
         };
         for e in &mut c.clients {
             e.side = Side::Left;
+            e.muted = false;
         }
         c
     };
@@ -728,6 +740,7 @@ mod tests {
             name: name.into(),
             address: format!("10.0.0.{}", name.len()),
             side,
+            muted: false,
         }
     }
 

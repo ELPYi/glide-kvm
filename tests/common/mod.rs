@@ -141,6 +141,7 @@ pub fn connected_pair(switching: SwitchSettings) -> Pair {
             name: "test-client".into(),
             address: format!("127.0.0.1:{client_port}"),
             side: Side::Right,
+            muted: false,
         }],
         switching,
         ..Config::new_default_with_secret(SECRET)

@@ -119,6 +119,13 @@ pub struct ClientEntry {
     pub address: String,
     /// Which edge of the server's screens this client sits beyond.
     pub side: Side,
+    /// Its sound isn't played here (muted from the Devices tab).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 fn default_port() -> u16 {
@@ -257,6 +264,7 @@ mod tests {
             name: name.into(),
             address: "10.0.0.2".into(),
             side,
+            muted: false,
         }
     }
 
@@ -289,7 +297,8 @@ mod tests {
             vec![ClientEntry {
                 name: "laptop".into(),
                 address: "192.168.1.18".into(),
-                side: Side::Right
+                side: Side::Right,
+                muted: false,
             }]
         );
     }
@@ -301,6 +310,7 @@ mod tests {
         c.switching.edge_delay_ms = 150;
         c.clients.push(client("laptop", Side::Right));
         c.clients.push(client("mini", Side::Left));
+        c.clients[1].muted = true;
         let back = Config::parse(&c.to_toml()).unwrap();
         assert_eq!(back, c);
     }
