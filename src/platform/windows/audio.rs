@@ -28,6 +28,7 @@ use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFre
 use windows::Win32::System::Threading::{CreateEventW, WaitForSingleObject};
 
 use crate::audio::{AudioIn, AudioOut, CHANNELS, SAMPLE_RATE};
+use crate::log;
 
 /// 100 ns units.
 const fn hns(ms: i64) -> i64 {
@@ -114,8 +115,11 @@ pub struct Loopback {
     /// event mode for loopback).
     event: Option<HANDLE>,
     device: String,
-    /// Set if we muted the speakers (unmuted again when done).
-    muted: Option<IAudioEndpointVolume>,
+    /// The speakers' mute switch, if they're to stay muted while capturing.
+    volume: Option<IAudioEndpointVolume>,
+    /// We muted them (so we unmute them when done; a mute the user set
+    /// themselves is left alone).
+    we_muted: bool,
 }
 
 impl Loopback {
@@ -152,25 +156,39 @@ impl Loopback {
             client,
             event,
             device: id,
-            muted: None,
+            volume: None,
+            we_muted: false,
         };
         unsafe { lb.client.Start()? };
         if mute {
-            lb.muted = mute_speakers(&device);
+            match unsafe { device.Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None) } {
+                Ok(v) => {
+                    lb.volume = Some(v);
+                    match lb.keep_muted() {
+                        Ok(true) => log!("muted this PC's speakers while sending its sound"),
+                        Ok(false) => log!("this PC's speakers were already muted"),
+                        Err(e) => log!("couldn't mute this PC's speakers: {e:#}"),
+                    }
+                }
+                Err(e) => log!("couldn't mute this PC's speakers: {e}"),
+            }
         }
         Ok(lb)
     }
-}
 
-/// Mute `device` unless it already is; returns it if we did.
-fn mute_speakers(device: &IMMDevice) -> Option<IAudioEndpointVolume> {
-    unsafe {
-        let vol: IAudioEndpointVolume = device.Activate(CLSCTX_ALL, None).ok()?;
-        if vol.GetMute().ok()?.as_bool() {
-            return None; // already muted by the user: leave it to them
+    /// Mute the speakers if they aren't. Something else can unmute them
+    /// (volume keys, the vendor's audio app, a driver resetting), so this
+    /// runs again about once a second. Returns whether it muted them now.
+    fn keep_muted(&mut self) -> Result<bool> {
+        let Some(vol) = &self.volume else { return Ok(false) };
+        unsafe {
+            if vol.GetMute()?.as_bool() {
+                return Ok(false);
+            }
+            vol.SetMute(true, std::ptr::null())?;
         }
-        vol.SetMute(true, std::ptr::null()).ok()?;
-        Some(vol)
+        self.we_muted = true;
+        Ok(true)
     }
 }
 
@@ -205,6 +223,9 @@ impl AudioIn for Loopback {
     }
 
     fn stale(&mut self) -> bool {
+        if let Ok(true) = self.keep_muted() {
+            log!("this PC's speakers were unmuted while sending its sound; muted them again");
+        }
         changed_from(&self.device)
     }
 }
@@ -213,7 +234,7 @@ impl Drop for Loopback {
     fn drop(&mut self) {
         unsafe {
             let _ = self.client.Stop();
-            if let Some(vol) = self.muted.take() {
+            if let (Some(vol), true) = (self.volume.take(), self.we_muted) {
                 let _ = vol.SetMute(false, std::ptr::null());
             }
             if let Some(e) = self.event.take() {
@@ -309,6 +330,12 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
+    fn set_muted(on: bool) {
+        let (device, _) = default_output().unwrap();
+        let vol: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None).unwrap() };
+        unsafe { vol.SetMute(on, std::ptr::null()).unwrap() };
+    }
+
     fn muted_now() -> bool {
         let (device, _) = default_output().unwrap();
         let vol: IAudioEndpointVolume = unsafe { device.Activate(CLSCTX_ALL, None).unwrap() };
@@ -326,6 +353,10 @@ mod tests {
         let mut loopback = Loopback::open(true).unwrap();
         assert!(loopback.event.is_some(), "event mode (sleeps through silence)");
         assert!(muted_now(), "speakers muted while capturing");
+        // Something else unmutes them: muted again on the next check.
+        set_muted(false);
+        loopback.stale();
+        assert!(muted_now(), "speakers muted again after being unmuted");
         let amp = 1e-4f32;
         let mut phase = 0usize;
         let mut heard: Vec<f32> = Vec::new();

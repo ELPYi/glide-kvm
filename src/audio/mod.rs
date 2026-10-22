@@ -88,7 +88,8 @@ pub trait AudioIn {
     /// Sleep until more sound is ready, or at most `max`.
     fn wait(&mut self, max: Duration);
     /// The default output device changed (headphones plugged in, say):
-    /// reopen to follow it.
+    /// reopen to follow it. Called about once a second, which is also when
+    /// the speakers are muted again if something unmuted them.
     fn stale(&mut self) -> bool;
 }
 

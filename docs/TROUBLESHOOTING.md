@@ -34,6 +34,10 @@
 - **Sound crackles**: usually Wi-Fi dropouts. glide keeps a little more in
   hand after each one, so it should settle within seconds. A cable helps
   most.
+- **The other PC's speakers still play too**: they're muted while it sends
+  its sound, and muted again within a second if something unmutes them. Check
+  **Settings → Sound → Mute this PC's speakers while sending** is on there, and its Logs tab
+  for "couldn't mute this PC's speakers".
 - **The other PC stayed muted**: glide unmutes it when it stops, but if
   glide was killed (Task Manager, a crash) it couldn't. Unmute it from the
   taskbar volume icon.
