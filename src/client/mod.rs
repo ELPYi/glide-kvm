@@ -45,11 +45,6 @@ const RESOLVE_EVERY: Duration = Duration::from_secs(5);
 const INBOX_CAPACITY: usize = 4096;
 /// Max packets merged per wake-up (bounds the time between injections).
 const MAX_DRAIN: usize = 512;
-/// While in control, keep polling the socket this long after the last
-/// packet instead of sleeping. A sleeping thread takes 20-60 µs to wake;
-/// polling picks the next mouse packet up within ~1 µs. Only runs while the
-/// mouse is actually moving here, so it costs nothing at rest.
-const HOT_POLL_FOR: Duration = Duration::from_millis(3);
 /// How often to check whether this PC can accept input (lock screen, admin
 /// window). Reported with every pong so the server never strands the cursor.
 const BLOCK_CHECK_EVERY: Duration = Duration::from_millis(100);
@@ -209,8 +204,6 @@ struct Client {
     inbox: Inbox<ReliableEv>,
     /// Motion received but not yet injected (merged across a drain).
     pending_motion: (i32, i32),
-    /// When mouse motion last arrived (drives hot polling).
-    last_motion_rx: Option<Instant>,
     /// Latest "can't accept input" state, and when it was checked.
     block: Option<InputBlock>,
     block_checked: Option<Instant>,
@@ -256,7 +249,6 @@ impl Client {
             last_knock: None,
             inbox: Inbox::new(INBOX_CAPACITY),
             pending_motion: (0, 0),
-            last_motion_rx: None,
             block: None,
             block_checked: None,
             active: false,
@@ -278,20 +270,16 @@ impl Client {
         let mut buf = [0u8; 1500];
         let mut was_connected = false;
         while running.load(Ordering::Relaxed) {
-            if self.active && self.last_motion_rx.is_some_and(|t| t.elapsed() < HOT_POLL_FOR) {
-                // Mouse is moving here: poll instead of sleeping.
-                if !self.drain(&mut buf) {
-                    std::thread::yield_now();
+            // Sleeps until a packet arrives. (Polling instead would pick a
+            // packet up ~20 µs sooner, which is lost in the network's
+            // milliseconds, and burns a whole core while the mouse moves.)
+            match self.sock.recv_from(&mut buf) {
+                Ok((n, src)) => {
+                    self.handle_packet(&buf[..n], src);
+                    self.drain(&mut buf);
                 }
-            } else {
-                match self.sock.recv_from(&mut buf) {
-                    Ok((n, src)) => {
-                        self.handle_packet(&buf[..n], src);
-                        self.drain(&mut buf);
-                    }
-                    Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-                    Err(_) => {} // e.g. ICMP unreachable echoes on Windows
-                }
+                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                Err(_) => {} // e.g. ICMP unreachable echoes on Windows
             }
             self.flush_motion();
             self.check_block();
@@ -545,7 +533,6 @@ impl Client {
 
     fn on_motion(&mut self, dx: i32, dy: i32) {
         if self.active {
-            self.last_motion_rx = Some(Instant::now());
             self.pending_motion.0 = self.pending_motion.0.saturating_add(dx);
             self.pending_motion.1 = self.pending_motion.1.saturating_add(dy);
         }

@@ -109,11 +109,11 @@ on this project's PCs (both on Wi-Fi):
 | Hook → encrypt → send (server) | ~5 µs | Sent inline in the hook; no queues or thread hops |
 | Motion pacing | 0–0.25 ms (wired) / 0–1 ms (Wi-Fi) | First move after a pause goes at once; interval adapts to the link's RTT |
 | Network, one way | ~0.1 ms wired, ~2–3 ms Wi-Fi | Packets tagged *voice* priority (qWAVE → WMM); keep-warm heartbeats every 25 ms stop radios dozing (dozing adds 10–100 ms to the next packet) |
-| Receive → inject (client) | ~9 µs while moving | Hot-polls the socket while the mouse moves (no 20–60 µs thread wake-ups); drains and merges so it never falls behind |
+| Receive → inject (client) | ~20 µs while moving | Sleeps in `recv` until a packet arrives, then drains and merges whatever else is waiting so it never falls behind. (It used to spin on the socket to save ~20 µs per packet; that burned a whole core while the mouse moved, for a gain lost in the network's milliseconds.) |
 | Waiting for a CPU on a busy PC | was 4–6 ms p50 / 25 ms p99 at full load → now ~0.1 ms / 1.3 ms | Hot threads are registered with MMCSS ("Pro Audio") and the process runs at high priority (`platform/windows/sched.rs`; `cargo test --release --test snappy under_cpu_load -- --ignored --nocapture`) |
 | Display | up to 1 frame | Outside glide's control (higher refresh rate helps) |
 
-Software overhead end to end: p50 ~9 µs while moving, ~27 µs for the first
+Software overhead end to end: p50 ~20 µs while moving, ~27 µs for the first
 move after a pause (`cargo test --test snappy latency -- --nocapture`). The
 network is everything else, which is why the Devices tab shows each link's
 typical round trip *and* its spikes. On Wi-Fi, a cable on either PC is
@@ -142,6 +142,7 @@ on, no devices):
 | Program size | 12 MB | 6.8 MB | same |
 | CPU, using the PC normally | ~3.7% of a core | ~0.5–1% | capture: monitor layout cached and cursor taken from hook data (was ~6 OS calls per mouse report); motion skipped entirely while local |
 | CPU, idle in the tray | ~3% | ~0.2% | timer sleeps until the next job instead of waking 200×/s |
+| CPU, controlling another PC with an 8 kHz mouse | ~180% of a core (both ends) | ~3.5% | client sleeps in `recv` instead of spinning; pacer sleeps on a high-resolution timer instead of spinning the last 0.3 ms (`cargo test --release --test cpu -- --ignored --nocapture`) |
 
 Measure with the scripts' approach: per-thread CPU via thread names
 (`glide-capture`, `glide-srv-*`, `glide-client`). The `GLIDE_INSTANCE`

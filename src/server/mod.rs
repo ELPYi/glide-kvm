@@ -521,7 +521,9 @@ impl Server {
                 .map(|t| t.saturating_duration_since(Instant::now()))
                 .unwrap_or_default();
             drop(st);
-            wait_precisely(wait);
+            // A high-resolution timer, not a spin: a packet a fraction of
+            // a millisecond later is lost in the network's own jitter.
+            platform::precise_sleep(wait);
             let mut st = self.lock();
             self.flush_motion(&mut st, Instant::now());
         }
@@ -791,19 +793,6 @@ fn motion_interval(rate_hz: u32, fast_link: bool) -> Duration {
         0 if fast_link => FAST_INTERVAL,
         0 => MOTION_INTERVAL,
         hz => Duration::from_secs(1) / hz,
-    }
-}
-
-/// Sleep `d` with ~µs accuracy: OS timer for most of it, then a short
-/// spin for the last fraction of a millisecond (timers overshoot that much).
-fn wait_precisely(d: Duration) {
-    const SPIN_FOR: Duration = Duration::from_micros(300);
-    let deadline = Instant::now() + d;
-    if d > SPIN_FOR {
-        platform::precise_sleep(d - SPIN_FOR);
-    }
-    while Instant::now() < deadline {
-        std::thread::yield_now();
     }
 }
 
