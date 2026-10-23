@@ -142,6 +142,7 @@ on, no devices):
 | Program size | 12 MB | 6.8 MB | same |
 | CPU, using the PC normally | ~3.7% of a core | ~0.5–1% | capture: monitor layout cached and cursor taken from hook data (was ~6 OS calls per mouse report); motion skipped entirely while local |
 | CPU, idle in the tray | ~3% | ~0.2% | timer sleeps until the next job instead of waking 200×/s |
+| CPU, using the PC normally, 8 kHz mouse | ~3.7% of a core (capture thread) | ~0.4% | the mouse hook is installed only while controlling another PC; locally Raw Input gives the buttons and `GetCursorPos` the edge position. Windows calls a mouse hook synchronously on every report before moving the cursor, so this also takes glide off your own cursor's path. `glide-cli selftest` checks the switch-over on the real OS |
 | CPU, controlling another PC with an 8 kHz mouse | ~180% of a core (both ends) | ~3.5% | client sleeps in `recv` instead of spinning; pacer sleeps on a high-resolution timer instead of spinning the last 0.3 ms (`cargo test --release --test cpu -- --ignored --nocapture`) |
 
 Measure with the scripts' approach: per-thread CPU via thread names

@@ -20,7 +20,8 @@ const F24: u16 = 194; // harmless key nothing listens to
 pub fn selftest() -> Result<()> {
     super::init_dpi();
     check_edges()?;
-    check_grab()
+    check_grab()?;
+    check_switch()
 }
 
 /// Warp to each outer edge and check that a push outward is detected.
@@ -102,6 +103,73 @@ fn check_grab() -> Result<()> {
         ensure!(!moved, "cursor moved even though it was grabbed");
         Ok(())
     })();
+    SELFTEST.store(false, Ordering::Relaxed);
+    result
+}
+
+/// Not grabbed: the cursor moves freely (no mouse hook). Pushing against an
+/// edge switches (decided on the capture thread, as in real use), and from
+/// then on the cursor is frozen while motion keeps arriving.
+fn check_switch() -> Result<()> {
+    let d = WinDesktop::new();
+    SELFTEST.store(true, Ordering::Relaxed);
+    let grab = Arc::new(AtomicBool::new(false));
+    let motion_x = Arc::new(AtomicI32::new(0));
+    let (mx, g) = (motion_x.clone(), grab.clone());
+    let capture = start_capture(
+        grab.clone(),
+        Box::new(move |ev| {
+            match ev {
+                Captured::Edge(_) => g.store(true, Ordering::Relaxed),
+                // Only the moves back left: the pushes that switched are
+                // forwarded too, and how many depends on timing.
+                Captured::Input(InputEvent::Motion { dx, .. }) if dx < 0 => {
+                    mx.fetch_add(dx, Ordering::Relaxed);
+                }
+                _ => {}
+            }
+            true
+        }),
+    );
+    let start = cursor_pos().unwrap_or(POINT { x: 0, y: 0 });
+    let result = (|| {
+        let _capture = capture?;
+        d.warp_to_edge(Side::Right, 0.5);
+        d.inject(&InputEvent::Motion { dx: -40, dy: 0 });
+        std::thread::sleep(Duration::from_millis(150));
+        let free = cursor_pos().unwrap();
+        d.inject(&InputEvent::Motion { dx: 40, dy: 0 }); // back to the edge
+        std::thread::sleep(Duration::from_millis(100));
+        for _ in 0..5 {
+            // Push: switches. (The position read lags one report, and
+            // acceleration may have left the cursor short of the edge, so
+            // the first pushes may not count yet; a real push is many.)
+            d.inject(&InputEvent::Motion { dx: 20, dy: 0 });
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        std::thread::sleep(Duration::from_millis(150));
+        let at_switch = cursor_pos().unwrap();
+        for _ in 0..5 {
+            d.inject(&InputEvent::Motion { dx: -20, dy: 0 });
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let after = cursor_pos().unwrap();
+        let mx = motion_x.load(Ordering::Relaxed);
+        println!(
+            "  switch: moved freely before = {}, switched = {}, frozen after = {}, raw motion dx sum = {mx}",
+            free.x != at_switch.x,
+            grab.load(Ordering::Relaxed),
+            after.x == at_switch.x
+        );
+        ensure!(free.x != at_switch.x, "the cursor didn't move while not grabbed");
+        ensure!(grab.load(Ordering::Relaxed), "pushing against the edge wasn't detected");
+        ensure!(after.x == at_switch.x, "the cursor moved after switching away");
+        ensure!(mx == -100, "raw motion was not delivered after switching away");
+        Ok(())
+    })();
+    unsafe {
+        SetCursorPos(start.x, start.y);
+    }
     SELFTEST.store(false, Ordering::Relaxed);
     result
 }

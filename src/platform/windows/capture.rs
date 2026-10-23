@@ -4,6 +4,14 @@
 //! key, button and wheel event. Mouse *motion* comes from Raw Input instead,
 //! so it is unaccelerated and keeps arriving even while the cursor is frozen.
 //!
+//! The mouse hook is only installed while another PC is being controlled
+//! (the only time mouse input must be swallowed). Windows waits for a
+//! mouse hook on every report before moving the cursor, so with a gaming
+//! mouse it was most of glide's CPU (3.7% of a core at 8 kHz vs 0.4%
+//! without) and sat on the path of the local cursor. Locally, Raw Input
+//! supplies the buttons and `GetCursorPos` the position for edge checks
+//! (which can lag one report, i.e. ≤1 ms: an edge push is many reports).
+//!
 //! Hooks run on the thread that installed them, and only while that thread
 //! pumps messages, so capture owns a dedicated high-priority thread.
 
@@ -47,9 +55,37 @@ thread_local! {
     /// Monitor layout, refreshed when displays change. Keeps the per-event
     /// edge check to a few comparisons (a gaming mouse sends 1000s/second).
     static LAYOUT: RefCell<ScreenLayout> = RefCell::new(ScreenLayout::default());
-    /// Latest cursor position, taken free from the mouse hook's event data
-    /// instead of asking the OS on every raw mouse event.
-    static CURSOR: Cell<(i32, i32)> = const { Cell::new((0, 0)) };
+    /// The mouse hook, while installed (only while grabbed).
+    static MOUSE_HOOK: Cell<HHOOK> = const { Cell::new(null_mut()) };
+}
+
+/// Install the mouse hook while grabbed, remove it otherwise. Runs on the
+/// capture thread after anything that can switch. Entering another PC is
+/// always decided on this thread (an edge or a shortcut), so the hook is in
+/// place before the next mouse report; leaving can come from the network,
+/// and then a lingering hook just passes input through until the next check.
+fn sync_mouse_hook() {
+    let want = grabbed();
+    MOUSE_HOOK.with(|h| unsafe {
+        if want && h.get().is_null() {
+            h.set(SetWindowsHookExW(
+                WH_MOUSE_LL,
+                Some(mouse_proc),
+                GetModuleHandleW(null()),
+                0,
+            ));
+            if h.get().is_null() {
+                crate::log!("couldn't install the mouse hook; this PC's mouse isn't blocked");
+            }
+        } else if !want && !h.get().is_null() {
+            UnhookWindowsHookEx(h.get());
+            h.set(null_mut());
+        }
+    });
+}
+
+fn mouse_hook_installed() -> bool {
+    MOUSE_HOOK.with(|h| !h.get().is_null())
 }
 
 fn refresh_layout() {
@@ -92,6 +128,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
                 Some(code) if !fake_shift => dispatch(Captured::Input(InputEvent::Key { code, down })),
                 _ => grabbed(),
             };
+            sync_mouse_hook(); // a shortcut may have switched
             if block {
                 return 1;
             }
@@ -144,7 +181,6 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
                 return 1;
             }
         } else {
-            CURSOR.with(|c| c.set((m.pt.x, m.pt.y)));
             let block = match mouse_event(wparam as u32, m.mouseData) {
                 Some(ev) => dispatch(Captured::Input(ev)),
                 None => grabbed(),
@@ -182,14 +218,23 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             let m = raw.data.mouse;
             // hDevice is null for injected input.
             let accepted = wanted(raw.header.hDevice.is_null());
+            // Without the hook, buttons come from here (the switcher tracks
+            // held buttons to not switch mid-drag). Nothing to block locally.
+            if accepted && !mouse_hook_installed() {
+                for ev in raw_buttons(u32::from(m.Anonymous.Anonymous.usButtonFlags)) {
+                    dispatch(Captured::Input(ev));
+                }
+            }
             let relative = m.usFlags & MOUSE_MOVE_ABSOLUTE == 0;
             let (dx, dy) = (m.lLastX, m.lLastY);
             if accepted && relative && (dx != 0 || dy != 0) {
                 if !grabbed() {
                     // Local use: the only question is whether we're pushing
                     // against an outer edge. Motion itself isn't needed.
-                    let (x, y) = CURSOR.with(Cell::get);
-                    if let Some(hit) = LAYOUT.with(|l| l.borrow().edge_hit(x, y, dx, dy)) {
+                    let Some(p) = super::desktop::cursor_pos() else {
+                        return DefWindowProcW(hwnd, msg, wparam, lparam);
+                    };
+                    if let Some(hit) = LAYOUT.with(|l| l.borrow().edge_hit(p.x, p.y, dx, dy)) {
                         dispatch(Captured::Edge(hit));
                     }
                 }
@@ -200,6 +245,22 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         }
     }
     DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+/// Button presses and releases in a Raw Input mouse report.
+fn raw_buttons(flags: u32) -> impl Iterator<Item = InputEvent> {
+    const BUTTONS: [(u32, u32, Button); 5] = [
+        (RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP, Button::Left),
+        (RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP, Button::Right),
+        (RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP, Button::Middle),
+        (RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_4_UP, Button::Back),
+        (RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_BUTTON_5_UP, Button::Forward),
+    ];
+    BUTTONS.into_iter().flat_map(move |(down, up, button)| {
+        let pressed = (flags & down != 0).then_some(InputEvent::Button { button, down: true });
+        let released = (flags & up != 0).then_some(InputEvent::Button { button, down: false });
+        pressed.into_iter().chain(released)
+    })
 }
 
 const MOUSE_USAGE_PAGE: u16 = 0x01; // generic desktop
@@ -233,18 +294,15 @@ unsafe fn ensure_raw_input(hwnd: HWND) -> bool {
     !ours && register_raw_input(hwnd)
 }
 
-/// Everything installed on the capture thread, torn down in reverse.
+/// Everything installed on the capture thread, torn down in reverse
+/// (plus the mouse hook, while grabbed).
 struct Installed {
     hwnd: HWND,
     keyboard: HHOOK,
-    mouse: HHOOK,
 }
 
 unsafe fn install() -> Result<Installed> {
     refresh_layout();
-    if let Some(p) = super::desktop::cursor_pos() {
-        CURSOR.with(|c| c.set((p.x, p.y)));
-    }
     let hinst = GetModuleHandleW(null());
     let class = wide("GlideCaptureWindow");
     let wc = WNDCLASSW {
@@ -277,9 +335,9 @@ unsafe fn install() -> Result<Installed> {
     }
     SetTimer(hwnd, RAW_INPUT_CHECK_TIMER, RAW_INPUT_CHECK_MS, None);
     let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hinst, 0);
-    let mouse = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), hinst, 0);
-    let installed = Installed { hwnd, keyboard, mouse };
-    if keyboard.is_null() || mouse.is_null() {
+    let installed = Installed { hwnd, keyboard };
+    sync_mouse_hook();
+    if keyboard.is_null() {
         uninstall(&installed);
         return Err(anyhow!("SetWindowsHookExW failed"));
     }
@@ -290,9 +348,11 @@ unsafe fn uninstall(i: &Installed) {
     if !i.keyboard.is_null() {
         UnhookWindowsHookEx(i.keyboard);
     }
-    if !i.mouse.is_null() {
-        UnhookWindowsHookEx(i.mouse);
-    }
+    MOUSE_HOOK.with(|h| {
+        if !h.get().is_null() {
+            UnhookWindowsHookEx(h.replace(null_mut()));
+        }
+    });
     KillTimer(i.hwnd, RAW_INPUT_CHECK_TIMER);
     let rid = RAWINPUTDEVICE {
         usUsagePage: MOUSE_USAGE_PAGE,
@@ -331,6 +391,7 @@ pub fn start_capture(grab: Arc<AtomicBool>, handler: Handler) -> Result<CaptureH
             while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
                 TranslateMessage(&msg);
                 DispatchMessageW(&msg);
+                sync_mouse_hook(); // an edge may have switched
             }
             uninstall(&installed);
             CTX.with(|c| *c.borrow_mut() = None);
@@ -345,4 +406,29 @@ pub fn start_capture(grab: Arc<AtomicBool>, handler: Handler) -> Result<CaptureH
         }
         let _ = thread.join();
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn raw_input_buttons() {
+        let evs: Vec<_> = raw_buttons(RI_MOUSE_LEFT_BUTTON_DOWN | RI_MOUSE_BUTTON_4_UP).collect();
+        assert_eq!(
+            evs,
+            [
+                InputEvent::Button {
+                    button: Button::Left,
+                    down: true
+                },
+                InputEvent::Button {
+                    button: Button::Back,
+                    down: false
+                },
+            ]
+        );
+        assert_eq!(raw_buttons(0).count(), 0, "plain motion");
+        assert_eq!(raw_buttons(RI_MOUSE_WHEEL).count(), 0, "wheel isn't a button");
+    }
 }
