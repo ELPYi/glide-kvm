@@ -136,8 +136,13 @@ fn layout_changes_apply_live() {
 #[test]
 fn latency_while_moving() {
     // A mouse being moved: one report per millisecond. Each one should reach
-    // the other PC's injector within a fraction of a millisecond.
-    let p = connected_pair(classic());
+    // the other PC's injector within a fraction of a millisecond. (Pacing
+    // set above the report rate, so this measures glide's own path rather
+    // than the OS timer, which is coarse on CI's virtual machines.)
+    let p = connected_pair(SwitchSettings {
+        mouse_rate_hz: 8000,
+        ..classic()
+    });
     enter(&p);
     let mut lat = Vec::new();
     let mut next = Instant::now();
