@@ -316,6 +316,15 @@ impl App {
                     }
                 }
             }
+            Action::RenameDevice { index, name } => {
+                let name = name.trim().to_string();
+                self.change_device(index, "Renamed", |clients| clients[index].name = name.clone());
+            }
+            Action::RemoveDevice { index } => {
+                self.change_device(index, "Removed", |clients| {
+                    clients.remove(index);
+                });
+            }
             Action::MoveDevice { index, side } => {
                 if move_device(&mut self.saved.clients, index, side) && self.save() {
                     // Keep the settings draft's sides in step (names/addresses untouched).
@@ -329,6 +338,27 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Rename or remove a device from its card: saved at once (the settings
+    /// draft follows) and sharing restarts to pick it up.
+    fn change_device(&mut self, index: usize, done: &str, change: impl Fn(&mut Vec<ClientEntry>)) {
+        if index >= self.saved.clients.len() {
+            return;
+        }
+        let old = self.saved.clone();
+        change(&mut self.saved.clients);
+        if !self.save() {
+            self.saved = old;
+            return;
+        }
+        if self.draft.clients.len() == old.clients.len() {
+            change(&mut self.draft.clients);
+        }
+        if self.engine.is_running() {
+            self.start();
+        }
+        self.notify(done, Tone::Good);
     }
 
     /// Change one shortcut, save it and apply it live.

@@ -18,6 +18,10 @@ pub struct DevicesUi {
     pub code: String,
     /// Server: the new PC's address, for the firewall fallback.
     pub poke_address: String,
+    /// Server: the device being renamed, and the name so far.
+    pub renaming: Option<(usize, String)>,
+    /// Server: the device whose removal is being confirmed.
+    pub removing: Option<usize>,
 }
 
 pub fn show(ui: &mut Ui, m: &Model, local: &mut DevicesUi, actions: &mut Actions) {
@@ -74,15 +78,8 @@ fn server(ui: &mut Ui, m: &Model, s: &ServerStatus, local: &mut DevicesUi, actio
     // Pairing first: it's the main thing to do here, so it's never below the fold.
     match &s.pairing {
         Some(p) => pairing_card(ui, m, p, local, actions),
-        None if s.peers.len() < 4 => {
-            ui.horizontal(|ui| {
-                if ui.add(theme::primary("+ Pair a device")).clicked() {
-                    actions.push(Action::StartPairing { poke: None });
-                }
-                if !s.peers.is_empty() && ui.button("Rename or remove…").clicked() {
-                    actions.push(Action::GoTo(Tab::Settings));
-                }
-            });
+        None if s.peers.len() < 4 && ui.add(theme::primary("+ Pair a device")).clicked() => {
+            actions.push(Action::StartPairing { poke: None });
         }
         None => {}
     }
@@ -131,19 +128,49 @@ fn server(ui: &mut Ui, m: &Model, s: &ServerStatus, local: &mut DevicesUi, actio
     }
 
     for (i, p) in s.peers.iter().enumerate() {
-        device_card(ui, m, s, i, p, actions);
+        device_card(ui, m, s, i, p, local, actions);
     }
 }
 
-fn device_card(ui: &mut Ui, m: &Model, s: &ServerStatus, i: usize, p: &PeerStatus, actions: &mut Actions) {
+/// The device's name, or a box to rename it in.
+fn name_or_rename(ui: &mut Ui, i: usize, p: &PeerStatus, local: &mut DevicesUi, actions: &mut Actions) {
+    let Some((_, name)) = local.renaming.as_mut().filter(|(at, _)| *at == i) else {
+        ui.label(
+            RichText::new(&p.name)
+                .font(theme::heavy(16.0))
+                .color(theme::TEXT_STRONG),
+        );
+        return;
+    };
+    let edit = ui.add(TextEdit::singleline(name).desired_width(160.0));
+    if !edit.has_focus() && !edit.lost_focus() {
+        edit.request_focus();
+    }
+    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    if ui.small_button("Save").clicked() || enter {
+        actions.push(Action::RenameDevice {
+            index: i,
+            name: name.clone(),
+        });
+        local.renaming = None;
+    } else if ui.small_button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        local.renaming = None;
+    }
+}
+
+fn device_card(
+    ui: &mut Ui,
+    m: &Model,
+    s: &ServerStatus,
+    i: usize,
+    p: &PeerStatus,
+    local: &mut DevicesUi,
+    actions: &mut Actions,
+) {
     let tone = peer_tone(s, i, p);
     card_with(ui, (tone == Tone::Active).then_some(Tone::Active), |ui| {
         ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(&p.name)
-                    .font(theme::heavy(16.0))
-                    .color(theme::TEXT_STRONG),
-            );
+            name_or_rename(ui, i, p, local, actions);
             let state = match (tone, p.blocked) {
                 (Tone::Active, _) => "In control",
                 (_, Some(b)) => b.label(),
@@ -159,6 +186,15 @@ fn device_card(ui: &mut Ui, m: &Model, s: &ServerStatus, i: usize, p: &PeerStatu
                 status_tag(ui, "Sound", Tone::Muted);
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("Remove").on_hover_text("Forget this PC").clicked() {
+                    local.removing = Some(i);
+                    local.renaming = None;
+                }
+                if ui.small_button("Rename").clicked() {
+                    local.renaming = Some((i, p.name.clone()));
+                    local.removing = None;
+                }
+                ui.add_space(6.0);
                 // Only offered while its sound would play here at all.
                 if m.saved.audio.play {
                     let (label, tip) = if p.muted {
@@ -180,6 +216,18 @@ fn device_card(ui: &mut Ui, m: &Model, s: &ServerStatus, i: usize, p: &PeerStatu
                 latency(ui, p);
             });
         });
+        if local.removing == Some(i) {
+            ui.horizontal(|ui| {
+                ui.label(format!("Remove {}? To use it again, pair it again.", p.name));
+                if ui.button("Remove").clicked() {
+                    actions.push(Action::RemoveDevice { index: i });
+                    local.removing = None;
+                }
+                if ui.button("Cancel").clicked() {
+                    local.removing = None;
+                }
+            });
+        }
         if p.rtt_ms.is_some_and(|ms| ms > SLOW_LINK_MS) {
             hint(
                 ui,

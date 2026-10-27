@@ -144,7 +144,7 @@ fn devices(ui: &mut Ui, draft: &mut Config) {
     section_title(ui, "Devices");
     hint(
         ui,
-        "Rename or remove PCs here. Add new ones by pairing; arrange them by dragging on the Devices tab.",
+        "Edit PCs set up by hand here. Rename or remove them on the Devices tab, add new ones by pairing, and arrange them by dragging there.",
     );
     let mut remove = None;
     egui::Grid::new("devices_grid")

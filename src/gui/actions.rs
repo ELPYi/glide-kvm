@@ -50,6 +50,15 @@ pub enum Action {
         index: usize,
         muted: bool,
     },
+    /// Renamed on its card (saves right away).
+    RenameDevice {
+        index: usize,
+        name: String,
+    },
+    /// Removed from its card (saves right away; pair again to bring it back).
+    RemoveDevice {
+        index: usize,
+    },
     /// Dragged on the layout map. Swaps with whatever was on `side`.
     MoveDevice {
         index: usize,
