@@ -369,6 +369,17 @@ fn switching(ui: &mut Ui, draft: &mut Config) {
     );
     field(
         ui,
+        "Keyboard",
+        Some("Move the cursor to another screen to look or scroll, and your typing stays where you were. Click on a PC to type there. Off: the keyboard goes wherever the cursor goes."),
+        |ui| {
+            ui.checkbox(
+                &mut draft.switching.keyboard_follows_click,
+                "Typing goes to the PC I last clicked on",
+            )
+        },
+    );
+    field(
+        ui,
         "Mouse update rate",
         Some("How often mouse movement is sent. Higher = less delay but more network traffic (can hurt on busy Wi-Fi). Automatic: 4000/s on a cable, 1000/s on Wi-Fi."),
         |ui| {

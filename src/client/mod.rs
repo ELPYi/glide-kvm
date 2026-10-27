@@ -582,7 +582,9 @@ impl Client {
                 }
             }
             ReliableEv::Input(ev) => {
-                if !self.active {
+                // Keys arrive even while the cursor is elsewhere: the
+                // keyboard stays with the PC you last clicked on.
+                if !self.active && !matches!(ev, InputEvent::Key { .. }) {
                     return;
                 }
                 match ev {

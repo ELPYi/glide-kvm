@@ -430,6 +430,12 @@ impl Server {
         if let Some(switch) = d.switch {
             self.apply_switch(st, switch);
         }
+        for (to, ev) in d.before {
+            match to {
+                None => self.desktop.inject(&ev),
+                Some(i) => self.send_input(st, i, ev),
+            }
+        }
         match d.forward {
             Some(Forward::Motion { dx, dy }) => {
                 let now = Instant::now();
@@ -440,16 +446,20 @@ impl Server {
                     self.pacer_wake.notify_one();
                 }
             }
-            Some(Forward::Reliable(ev)) => {
-                // Motion first, so a click lands where the cursor actually is.
-                self.flush_motion(st, Instant::now());
-                if let Some(i) = st.switcher.active() {
-                    self.send_reliable(&mut st.peers[i], ReliableEv::Input(ev));
-                }
-            }
+            Some(Forward::Reliable(i, ev)) => self.send_input(st, i, ev),
             None => {}
         }
         d.block
+    }
+
+    fn send_input(&self, st: &mut State, peer: usize, ev: crate::input::InputEvent) {
+        if st.switcher.active() == Some(peer) {
+            // Motion first, so a click lands where the cursor actually is.
+            self.flush_motion(st, Instant::now());
+        }
+        if let Some(p) = st.peers.get_mut(peer) {
+            self.send_reliable(p, ReliableEv::Input(ev));
+        }
     }
 
     fn flush_motion(&self, st: &mut State, now: Instant) {
@@ -711,6 +721,13 @@ impl Server {
             }
             // Addresses can change (DHCP, roaming); keep mutes pointed right.
             self.sync_muted(&st);
+            // The PC typing goes to is gone or locked: type here again.
+            if let Some(i) = st.switcher.keyboard().filter(|&i| st.switcher.active() != Some(i)) {
+                if st.peers.get(i).is_none_or(|p| !p.alive() || p.blocked.is_some()) {
+                    log!("the PC you were typing on can't take keys; typing here again");
+                    st.switcher.keyboard_lost();
+                }
+            }
             if st.switcher.active().is_some_and(|i| !st.peers[i].alive()) {
                 log!("lost the active device; taking input back");
                 if let Some(switch) = st.switcher.force_leave() {

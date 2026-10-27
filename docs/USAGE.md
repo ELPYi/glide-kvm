@@ -52,6 +52,7 @@ fire while you're pressing Ctrl+Shift+L. You can also reset a shortcut or turn i
 | **Don't switch PCs while a mouse button is held** | On by default. Dragging a window to an edge snaps it instead of switching, on whichever PC you're using. |
 | **Edge delay** | How long you must push against an edge before switching, in either direction (0–500 ms). |
 | **Same mouse feel on every PC** | On by default. The PC you're controlling temporarily uses this PC's pointer speed and acceleration, so the cursor feels identical. |
+| **Typing goes to the PC I last clicked on** | On by default. Move the cursor to another screen to look or scroll and your typing stays where you were; click on a PC to type there. Held Ctrl / Shift / Alt / Win move with the click, so Ctrl+click works anywhere. Off: the keyboard goes wherever the cursor goes. |
 
 ### Gaming: stay on this PC
 

@@ -10,7 +10,6 @@ use common::*;
 use glide::audio::play::Player;
 use glide::audio::share::Sharer;
 use glide::audio::{AudioIn, AudioOut, AudioSettings, CHANNELS, SAMPLE_RATE};
-use glide::config::SwitchSettings;
 use glide::input::Side;
 use glide::platform::{Captured, EdgeHit};
 
@@ -72,7 +71,7 @@ impl AudioOut for RecordingOut {
 
 #[test]
 fn a_pcs_sound_plays_on_the_sharing_pc() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let heard = Arc::new(Mutex::new(Vec::new()));
     let h = heard.clone();
     p.server.set_player(Some(Player::start(
@@ -156,7 +155,7 @@ fn mouse_latency(p: &Pair) -> (Duration, Duration) {
 #[test]
 #[ignore = "benchmark; run in release"]
 fn sound_does_not_slow_the_mouse() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     p.server.on_captured(Captured::Edge(EdgeHit {
         side: Side::Right,
         frac: 0.5,
@@ -199,7 +198,7 @@ fn sound_does_not_slow_the_mouse() {
 /// Typing while sound streams: every key arrives, in order.
 #[test]
 fn typing_works_while_sound_streams() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let client = p.client.as_ref().unwrap();
     p.server.set_player(Some(Player::start(
         AudioSettings::default(),
@@ -247,7 +246,7 @@ fn typing_works_while_sound_streams() {
 /// Muting a device on the sharing PC silences it; unmuting brings it back.
 #[test]
 fn a_device_can_be_muted_from_the_sharing_pc() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let client = p.client.as_ref().unwrap();
     let heard = Arc::new(Mutex::new(Vec::new()));
     let h = heard.clone();

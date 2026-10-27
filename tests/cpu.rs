@@ -17,7 +17,6 @@ use common::*;
 use glide::audio::play::Player;
 use glide::audio::share::Sharer;
 use glide::audio::{AudioIn, AudioOut, AudioSettings, CHANNELS, SAMPLE_RATE};
-use glide::config::SwitchSettings;
 use glide::input::{InputEvent, Side};
 use glide::platform::{Captured, EdgeHit};
 
@@ -165,7 +164,7 @@ fn wiggle(p: &Pair, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
 #[test]
 #[ignore = "benchmark; run in release"]
 fn where_the_cpu_goes() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     std::thread::sleep(Duration::from_millis(500));
     measure("connected, using this PC");
 

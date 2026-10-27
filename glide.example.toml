@@ -33,6 +33,8 @@ edge_delay_ms = 0
 # While controlling another PC, give it this PC's pointer speed and
 # acceleration, so the mouse feels the same everywhere.
 match_pointer_feel = true
+# Typing goes to the PC you last clicked on, not wherever the cursor is.
+keyboard_follows_click = true
 
 # Shortcuts, pressed on the sharing PC. Modifiers: Ctrl, Alt, Shift, Win.
 # Keys: letters, digits, F1-F24, Home, End, PageUp, Insert, Delete, Pause,

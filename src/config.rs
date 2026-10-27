@@ -95,6 +95,9 @@ pub struct SwitchSettings {
     /// Higher = less delay but more packets; 8000 effectively sends every
     /// report from a high-polling-rate mouse.
     pub mouse_rate_hz: u32,
+    /// Typing goes to the PC you last clicked on, not the one the cursor is
+    /// on. Off = the keyboard goes wherever the mouse goes.
+    pub keyboard_follows_click: bool,
 }
 
 /// Choices offered for [`SwitchSettings::mouse_rate_hz`] (0 = automatic).
@@ -107,6 +110,7 @@ impl Default for SwitchSettings {
             edge_delay_ms: 0,
             match_pointer_feel: true,
             mouse_rate_hz: 0,
+            keyboard_follows_click: true,
         }
     }
 }

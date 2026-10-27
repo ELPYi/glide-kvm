@@ -5,7 +5,6 @@
 mod common;
 
 use common::*;
-use glide::config::SwitchSettings;
 use glide::input::{InputBlock, Side};
 use glide::platform::{Captured, EdgeHit};
 
@@ -18,7 +17,7 @@ fn edge_right() -> Captured {
 
 #[test]
 fn never_crosses_into_a_locked_pc() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     *p.client_desk.block.lock().unwrap() = Some(InputBlock::SecureScreen);
     wait_for("server learns it's locked", || {
         p.server.status().peers[0].blocked == Some(InputBlock::SecureScreen)
@@ -41,7 +40,7 @@ fn never_crosses_into_a_locked_pc() {
 
 #[test]
 fn takes_control_back_when_the_pc_locks_mid_session() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     p.server.on_captured(edge_right());
     wait_for("in control", || p.client.as_ref().unwrap().status().active);
     assert!(p.server.grab_flag().load(std::sync::atomic::Ordering::Relaxed));

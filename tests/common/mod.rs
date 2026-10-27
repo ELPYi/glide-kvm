@@ -92,6 +92,16 @@ impl Desktop for MockDesktop {
     }
 }
 
+/// The keyboard goes wherever the mouse goes, so a test can cross and type
+/// without clicking first. (The default, keyboard-follows-click, has its own
+/// test in `end_to_end.rs`.)
+pub fn classic() -> SwitchSettings {
+    SwitchSettings {
+        keyboard_follows_click: false,
+        ..SwitchSettings::default()
+    }
+}
+
 pub fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !cond() {

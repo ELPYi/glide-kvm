@@ -38,7 +38,7 @@ fn edge_right(frac: f32) -> Captured {
 
 #[test]
 fn input_crosses_over_and_back() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let srv = &p.server;
 
     // Cross the right edge: client is entered on its left edge, same height.
@@ -79,7 +79,7 @@ fn input_crosses_over_and_back() {
 
 #[test]
 fn latency_hook_to_injection() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     p.server.on_captured(edge_right(0.5));
     wait_for("enter", || p.client.as_ref().unwrap().status().active);
 
@@ -108,7 +108,7 @@ fn drag_protection_end_to_end() {
     let p = connected_pair(SwitchSettings {
         block_while_dragging: true,
         edge_delay_ms: 0,
-        ..Default::default()
+        ..classic()
     });
     let left = |down| {
         Captured::Input(InputEvent::Button {
@@ -129,7 +129,7 @@ fn drag_protection_end_to_end() {
     p.server.set_switching(SwitchSettings {
         block_while_dragging: false,
         edge_delay_ms: 0,
-        ..Default::default()
+        ..classic()
     });
     p.server.on_captured(left(true));
     p.server.on_captured(edge_right(0.5));
@@ -142,7 +142,7 @@ fn drag_protection_end_to_end() {
 
 #[test]
 fn lock_and_hotkeys() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let srv = &p.server;
 
     // Ctrl+Shift+L locks; the L itself never leaks to the focused app.
@@ -176,7 +176,7 @@ fn lock_and_hotkeys() {
 
 #[test]
 fn status_reports_connection_and_rtt() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let st = p.server.status();
     assert_eq!(st.peers.len(), 1);
     assert_eq!(st.peers[0].name, "test-client");
@@ -191,7 +191,7 @@ fn status_reports_connection_and_rtt() {
 
 #[test]
 fn client_restart_is_detected() {
-    let mut p = connected_pair(SwitchSettings::default());
+    let mut p = connected_pair(classic());
     p.server.on_captured(edge_right(0.5));
     wait_for("enter", || p.client.as_ref().unwrap().status().active);
 
@@ -244,7 +244,7 @@ fn wrong_secret_never_connects() {
 
 #[test]
 fn shortcuts_are_recorded_and_applied_live() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let srv = &p.server;
 
     // Settings → Change: the next combination is captured, not acted on.
@@ -269,7 +269,7 @@ fn shortcuts_are_recorded_and_applied_live() {
 
 #[test]
 fn shortcuts_confirm_on_the_screen_you_are_using() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let srv = &p.server;
 
     // Locking while here: the confirmation shows on this PC.
@@ -294,7 +294,7 @@ fn shortcuts_confirm_on_the_screen_you_are_using() {
 
 #[test]
 fn cursor_hides_on_the_pc_you_are_not_using() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let srv = &p.server;
     *p.client_desk.cursor.lock().unwrap() = Some((500, 300));
     let hidden = |d: &MockDesktop| d.cursor_hidden.lock().unwrap().last().copied();
@@ -324,7 +324,7 @@ fn cursor_hides_on_the_pc_you_are_not_using() {
 fn a_game_in_focus_keeps_the_mouse_on_its_pc() {
     use glide::game::Foreground;
     use glide::server::GAME_CHECK_EVERY;
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let srv = &p.server;
     let client = || p.client.as_ref().unwrap().status();
     let fullscreen = |app: &str| Foreground {
@@ -367,4 +367,61 @@ fn a_game_in_focus_keeps_the_mouse_on_its_pc() {
     wait_for("game gone over there", || client().game.is_none());
     srv.on_captured(Captured::Input(InputEvent::Motion { dx: -3, dy: 0 }));
     wait_for("back here", || srv.status().active.is_none());
+}
+
+/// The default: typing stays with the PC you last clicked on, wherever the
+/// cursor goes. Keys reach the client even while the cursor is back here.
+#[test]
+fn typing_stays_on_the_pc_you_clicked() {
+    let p = connected_pair(SwitchSettings::default());
+    let srv = &p.server;
+    let client = p.client.as_ref().unwrap();
+    let left = |down| {
+        Captured::Input(InputEvent::Button {
+            button: Button::Left,
+            down,
+        })
+    };
+
+    srv.on_captured(edge_right(0.5));
+    wait_for("client reports active", || client.status().active);
+    assert!(!srv.on_captured(key(30, true)), "no click there yet: typing stays here");
+    srv.on_captured(key(30, false));
+
+    assert!(srv.on_captured(left(true)), "the click goes there");
+    srv.on_captured(left(false));
+    assert!(srv.on_captured(key(31, true)), "and now typing goes there too");
+    srv.on_captured(key(31, false));
+
+    // Cursor back here (pushed off the client's edge); keep typing.
+    *p.client_desk.edge.lock().unwrap() = Some(EdgeHit {
+        side: Side::Left,
+        frac: 0.5,
+    });
+    srv.on_captured(Captured::Input(InputEvent::Motion { dx: -4, dy: 0 }));
+    wait_for("return", || srv.status().active.is_none());
+    wait_for("client reports inactive", || !client.status().active);
+    assert!(srv.on_captured(key(32, true)), "still typing over there");
+    srv.on_captured(key(32, false));
+    wait_for("keys typed after the cursor left", || {
+        p.client_desk
+            .events()
+            .contains(&InputEvent::Key { code: 32, down: false })
+    });
+
+    // Click here: typing comes back.
+    assert!(!srv.on_captured(left(true)));
+    srv.on_captured(left(false));
+    assert!(!srv.on_captured(key(33, true)), "clicked here: typing here");
+    srv.on_captured(key(33, false));
+    let typed_there: Vec<u16> = p
+        .client_desk
+        .events()
+        .iter()
+        .filter_map(|e| match e {
+            InputEvent::Key { code, down: true } => Some(*code),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(typed_there, [31, 32]);
 }

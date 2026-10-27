@@ -762,6 +762,7 @@ mod tests {
             edge_delay_ms: 200,
             match_pointer_feel: false,
             mouse_rate_hz: 4000,
+            keyboard_follows_click: false,
         };
         new.run_as_admin = true;
         new.start_on_open = !old.start_on_open;

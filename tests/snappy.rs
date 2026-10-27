@@ -40,7 +40,7 @@ fn enter(p: &Pair) {
 
 #[test]
 fn fast_mouse_is_merged_not_lost() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     enter(&p);
     let (sent, _) = stream_8khz(&p, Duration::from_millis(250));
     wait_for("all motion", || p.client_desk.motion_sum().0 == sent);
@@ -56,7 +56,7 @@ fn fast_mouse_is_merged_not_lost() {
 
 #[test]
 fn busy_receiver_does_not_build_a_backlog() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     enter(&p);
     // Every injected move takes 3 ms, like Windows mid window-drag. Replaying
     // packets one by one would fall ~1 s behind over this stream.
@@ -70,7 +70,7 @@ fn busy_receiver_does_not_build_a_backlog() {
 
 #[test]
 fn pointer_feel_is_mirrored_then_restored() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     let feel = PointerFeel {
         speed: 6,
         acceleration: false,
@@ -100,7 +100,7 @@ fn pointer_feel_is_mirrored_then_restored() {
 fn pointer_feel_can_be_turned_off() {
     let settings = SwitchSettings {
         match_pointer_feel: false,
-        ..Default::default()
+        ..classic()
     };
     let p = connected_pair(settings);
     *p.server_desk.feel.lock().unwrap() = Some(PointerFeel {
@@ -117,7 +117,7 @@ fn pointer_feel_can_be_turned_off() {
 
 #[test]
 fn layout_changes_apply_live() {
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     p.server.set_layout(&[Side::Left]).unwrap();
     p.server.on_captured(edge(Side::Right));
     assert_eq!(p.server.status().active, None, "nothing on the right any more");
@@ -137,7 +137,7 @@ fn layout_changes_apply_live() {
 fn latency_while_moving() {
     // A mouse being moved: one report per millisecond. Each one should reach
     // the other PC's injector within a fraction of a millisecond.
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     enter(&p);
     let mut lat = Vec::new();
     let mut next = Instant::now();
@@ -182,7 +182,7 @@ fn under_cpu_load() {
         })
         .collect();
 
-    let p = connected_pair(SwitchSettings::default());
+    let p = connected_pair(classic());
     enter(&p);
     // This thread plays the capture thread, which the real app boosts.
     glide::platform::boost_latency_thread();

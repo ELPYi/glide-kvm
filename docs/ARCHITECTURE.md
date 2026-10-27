@@ -189,8 +189,17 @@ capture the next combination. That goes through the same low-level hook,
 so keys the GUI toolkit can't see (Scroll Lock, Pause) work too.
 
 **No stuck keys, ever.** The client tracks what it has pressed and releases
-all of it on leave, on timeout (1.5 s) and on stop. The server lets the
-release of any key held *while crossing* reach the local machine.
+all of it on leave, on timeout (1.5 s) and on stop. The server's switcher
+remembers where each held key's press went (`key_dest`) and sends its
+repeats and release to the same PC, whatever has switched since.
+
+**Keyboard follows the last click** (`keyboard_follows_click`, default on).
+The mouse goes where the cursor is; new key presses go to the PC last clicked
+on (`Switcher::keyboard`). A click moves the keyboard to the cursor's PC, and
+held modifiers move with it (released where they were pressed, pressed on
+the new PC, before the click), so Ctrl+click works anywhere. Clients inject
+keys even while the cursor is elsewhere. If that PC disconnects or locks,
+typing returns to the server (`keyboard_lost`).
 
 ### Updates
 
