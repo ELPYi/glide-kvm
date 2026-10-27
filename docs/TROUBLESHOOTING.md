@@ -28,6 +28,10 @@
   The UAC prompt itself, the lock screen and Ctrl+Alt+Del can't be
   controlled remotely; Windows keeps those on a protected desktop.
 - **Ctrl+Alt+Del** always goes to the PC you're physically at; Windows reserves it.
+- **Mac: sharing won't start, or the cursor doesn't move there**: glide needs
+  the Accessibility permission. In System Settings, Privacy & Security,
+  Accessibility, turn glide on (if it's already on, remove it with the minus
+  button and add it again), then quit and reopen glide.
 - **No sound from another PC**: check **Settings → Sound** on both PCs, and
   that both run glide 0.4.7 or later. The Logs tab on each says whether it's
   sending or playing, or why it can't (no speakers found, say).

@@ -119,7 +119,7 @@ impl Drop for CaptureHandle {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod unsupported;
 
 #[cfg(windows)]

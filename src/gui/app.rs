@@ -630,11 +630,12 @@ fn autostart_state(cfg: &Config) -> bool {
     }
 }
 
-/// The OS handle of the app window (Windows only, for now).
+/// The OS handle of the app window (an HWND, or on a Mac its NSView).
 fn window_handle(cc: &eframe::CreationContext) -> Option<isize> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     match cc.window_handle().ok()?.as_raw() {
         RawWindowHandle::Win32(h) => Some(h.hwnd.get()),
+        RawWindowHandle::AppKit(h) => Some(h.ns_view.as_ptr() as isize),
         _ => None,
     }
 }

@@ -60,7 +60,9 @@ config, platform and networking together.
 | `src/platform/mod.rs` | The OS contract: `Desktop` trait, `start_capture`, `system` | — |
 | `src/platform/geometry.rs` | **Pure** monitor layout: outer-edge detection, entry points (multi-monitor, L-shaped) | `input` |
 | `src/platform/windows/` | Windows implementation, one file per concern: `capture`, `desktop`, `keymap`, `pointer` (speed/acceleration), `timing` (sub-ms sleep), `qos` (network priority), `http` (HTTPS via WinHTTP, for updates), `audio` (WASAPI loopback + playback), `system`, `selftest` | Win32 |
-| `src/platform/{linux,macos}.rs` | Plans + stubs (`unsupported.rs`) | — |
+| `src/platform/macos/` | macOS: `capture` (CoreGraphics event tap), `desktop` (CGEventPost, display geometry), `keymap`, `cursor`, `clipboard` (NSPasteboard), `system` (LaunchAgent, window, one instance), `ffi` | CoreGraphics, AppKit (`objc2`) |
+| `src/clip/convert.rs` | **Pure** Windows <-> Mac clipboard formats: DIB <-> PNG, "HTML Format" <-> HTML | `png` |
+| `src/platform/linux.rs` | Plan + stubs (`unsupported.rs`) | — |
 | `src/gui/` | The app; see [The app](#the-app-gui) | `engine`, `config`, `status` |
 
 Dependencies point **down**: `gui` → `engine` → `server`/`client` → `net`/`platform` → `input`.
@@ -372,8 +374,8 @@ and first-run config creation, is unit-tested in `gui/app.rs`.
 
 ## Adding an OS
 
-Implement the contract in `src/platform/mod.rs` in `src/platform/<os>.rs`
-(the plans are already written in `linux.rs` and `macos.rs`):
+Implement the contract in `src/platform/mod.rs` in `src/platform/<os>/`
+(`macos/` is a compact example; the plan for Linux is in `linux.rs`):
 
 1. `desktop()`: inject keys (map evdev codes, the wire format, to native ones), relative motion, buttons, wheel; warp the cursor; detect edges.
 2. `start_capture()`: capture physical input on a thread, call the handler, swallow while grabbed, report edge pushes.
@@ -381,7 +383,8 @@ Implement the contract in `src/platform/mod.rs` in `src/platform/<os>.rs`
 4. `selftest()`.
 
 Nothing outside `platform/` should need to change.
-`cargo check --target x86_64-unknown-linux-gnu` / `aarch64-apple-darwin` keeps the stubs honest.
+`cargo clippy --target aarch64-apple-darwin` checks the Mac code from Windows
+(it can't link there; CI builds, signs and packages `glide.app` on a Mac runner).
 
 ## Rust primer for this codebase
 

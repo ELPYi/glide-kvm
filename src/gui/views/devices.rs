@@ -285,7 +285,9 @@ fn pairing_card(ui: &mut Ui, m: &Model, p: &PairingStatus, local: &mut DevicesUi
                     actions.push(Action::StartPairing { poke: Some(local.poke_address.trim().to_string()) });
                 }
             });
-            hint(ui, "Still stuck? Settings, Advanced: Allow glide through the firewall.");
+            if cfg!(windows) {
+                hint(ui, "Still stuck? Settings, Advanced: Allow glide through the firewall.");
+            }
         });
     });
 }

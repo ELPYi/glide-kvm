@@ -1,7 +1,10 @@
 //! Over-the-air updates from GitHub Releases.
 //!
-//! CI publishes each release with `glide.exe`, `glide-cli.exe` and a small
-//! `latest.toml` manifest (version + SHA-256 of each file). A release build
+//! CI publishes each release with `glide.exe`, `glide-cli.exe`, the Mac's
+//! `glide-macos` and a small `latest.toml` manifest (version + SHA-256 of
+//! each file). On a Mac only the program inside `glide.app` is replaced; the
+//! app around it never changes, so its signature (and the permissions macOS
+//! gave it) stay valid. A release build
 //! checks the manifest shortly after starting and every 30 minutes. When a newer
 //! version exists it downloads it next to itself (`*.new`), verifies the
 //! checksums, then waits until you're idle (not using this PC, not
@@ -24,8 +27,23 @@ use sha2::{Digest, Sha256};
 use crate::log;
 
 pub const MANIFEST: &str = "latest.toml";
+#[cfg(windows)]
 pub const APP_EXE: &str = "glide.exe";
+#[cfg(windows)]
 pub const CLI_EXE: &str = "glide-cli.exe";
+#[cfg(not(windows))]
+pub const APP_EXE: &str = "glide";
+#[cfg(not(windows))]
+pub const CLI_EXE: &str = "glide-cli";
+/// This OS's files in a release.
+#[cfg(target_os = "macos")]
+const APP_ASSET: &str = "glide-macos";
+#[cfg(target_os = "macos")]
+const CLI_ASSET: &str = "glide-cli-macos";
+#[cfg(not(target_os = "macos"))]
+const APP_ASSET: &str = APP_EXE;
+#[cfg(not(target_os = "macos"))]
+const CLI_ASSET: &str = CLI_EXE;
 /// Passed to the new version when it's started after an update.
 pub const AFTER_UPDATE_ARG: &str = "--after-update";
 
@@ -42,6 +60,22 @@ pub struct Manifest {
     pub version: String,
     pub glide_sha256: String,
     pub cli_sha256: String,
+    /// Empty when that release has no Mac build.
+    #[serde(default)]
+    pub macos_glide_sha256: String,
+    #[serde(default)]
+    pub macos_cli_sha256: String,
+}
+
+impl Manifest {
+    /// Checksums of this OS's (app, command-line tool).
+    fn checksums(&self) -> (&str, &str) {
+        if cfg!(target_os = "macos") {
+            (&self.macos_glide_sha256, &self.macos_cli_sha256)
+        } else {
+            (&self.glide_sha256, &self.cli_sha256)
+        }
+    }
 }
 
 pub fn manifest_url(repo: &str) -> String {
@@ -79,14 +113,24 @@ pub fn stage(target: &Path, bytes: &[u8], expected_sha256: &str) -> Result<PathB
     }
     let staged = with_suffix(target, ".new");
     std::fs::write(&staged, bytes).with_context(|| format!("writing {}", staged.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+    }
     Ok(staged)
 }
 
 /// Swap `target.new` into place. The running program can't be deleted, but
 /// Windows allows renaming it, so it becomes `target.old` (removed on the
-/// next start).
+/// next start). A Mac allows either.
 pub fn install(target: &Path) -> Result<()> {
     let staged = with_suffix(target, ".new");
+    // A Mac replaces the file in one step (the running copy carries on from
+    // the old one), leaving nothing extra inside the signed app.
+    if cfg!(unix) {
+        return std::fs::rename(&staged, target).with_context(|| format!("installing {}", target.display()));
+    }
     let old = with_suffix(target, ".old");
     let _ = std::fs::remove_file(&old);
     if target.exists() {
@@ -270,16 +314,17 @@ fn check_and_download(u: &Updater, dir: &Path) -> Result<Option<String>> {
     let repo = crate::UPDATE_REPO;
     let text = crate::platform::http_get(&manifest_url(repo))?;
     let manifest: Manifest = toml::from_str(std::str::from_utf8(&text)?).context("reading the release manifest")?;
-    if !is_newer(&manifest.version, crate::VERSION) {
+    let (app_sha, cli_sha) = manifest.checksums();
+    if !is_newer(&manifest.version, crate::VERSION) || app_sha.is_empty() {
         return Ok(None);
     }
     u.set(UpdateState::Downloading(manifest.version.clone()));
     log!("downloading glide {}", manifest.version);
-    let app = crate::platform::http_get(&asset_url(repo, &manifest.version, APP_EXE))?;
-    stage(&dir.join(APP_EXE), &app, &manifest.glide_sha256)?;
-    if dir.join(CLI_EXE).exists() {
-        let cli = crate::platform::http_get(&asset_url(repo, &manifest.version, CLI_EXE))?;
-        stage(&dir.join(CLI_EXE), &cli, &manifest.cli_sha256)?;
+    let app = crate::platform::http_get(&asset_url(repo, &manifest.version, APP_ASSET))?;
+    stage(&dir.join(APP_EXE), &app, app_sha)?;
+    if dir.join(CLI_EXE).exists() && !cli_sha.is_empty() {
+        let cli = crate::platform::http_get(&asset_url(repo, &manifest.version, CLI_ASSET))?;
+        stage(&dir.join(CLI_EXE), &cli, cli_sha)?;
     }
     Ok(Some(manifest.version))
 }
@@ -314,12 +359,13 @@ mod tests {
     fn manifest_format() {
         let m: Manifest = toml::from_str("version = \"0.4.17\"\nglide_sha256 = \"ab\"\ncli_sha256 = \"cd\"\n").unwrap();
         assert_eq!(m.version, "0.4.17");
+        assert_eq!(m.macos_glide_sha256, "", "releases from before Mac builds still read");
         assert_eq!(
             manifest_url("me/glide-kvm"),
             "https://github.com/me/glide-kvm/releases/latest/download/latest.toml"
         );
         assert_eq!(
-            asset_url("me/glide-kvm", "0.4.17", APP_EXE),
+            asset_url("me/glide-kvm", "0.4.17", "glide.exe"),
             "https://github.com/me/glide-kvm/releases/download/v0.4.17/glide.exe"
         );
     }
@@ -341,7 +387,9 @@ mod tests {
         stage(&exe, new, &sha256_hex(new)).unwrap();
         install(&exe).unwrap();
         assert_eq!(std::fs::read(&exe).unwrap(), new);
-        assert_eq!(std::fs::read(with_suffix(&exe, ".old")).unwrap(), b"old version");
+        if cfg!(windows) {
+            assert_eq!(std::fs::read(with_suffix(&exe, ".old")).unwrap(), b"old version");
+        }
 
         clean_up_old(&dir);
         assert!(!with_suffix(&exe, ".old").exists());

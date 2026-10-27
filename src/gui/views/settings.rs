@@ -118,6 +118,10 @@ fn advanced(ui: &mut Ui, m: &Model, draft: &mut Config, role: Role, local: &mut 
             field(ui, "Port", Some("UDP. Same on every PC. Default 24801."), |ui| {
                 ui.add(DragValue::new(&mut draft.port).range(1..=65535));
             });
+            // A Mac asks by itself the first time glide uses the network.
+            if !cfg!(windows) {
+                return;
+            }
             field(
                 ui,
                 "Firewall",
@@ -523,7 +527,11 @@ fn startup(ui: &mut Ui, m: &Model, draft: &mut Config, actions: &mut Actions) {
     field(
         ui,
         "Close button",
-        Some("Find glide by the clock (you may need to click the ^ arrow). Right-click its icon to quit."),
+        Some(if cfg!(target_os = "macos") {
+            "Find glide's icon in the menu bar at the top of the screen. Right-click it to quit."
+        } else {
+            "Find glide by the clock (you may need to click the ^ arrow). Right-click its icon to quit."
+        }),
         |ui| {
             ui.checkbox(
                 &mut draft.close_to_tray,
@@ -543,6 +551,9 @@ fn startup(ui: &mut Ui, m: &Model, draft: &mut Config, actions: &mut Actions) {
             actions.push(Action::SetAutostart(on));
         }
     });
+    if !cfg!(windows) {
+        return; // administrator mode is a Windows thing
+    }
     field(
         ui,
         "Admin windows",

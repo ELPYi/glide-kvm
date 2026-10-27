@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Deliberately version-free: updates replace only Contents/MacOS/glide,
+     and its signature covers this file, so this must never change. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>glide</string>
+    <key>CFBundleIdentifier</key>
+    <string>app.glide</string>
+    <key>CFBundleName</key>
+    <string>glide</string>
+    <key>CFBundleDisplayName</key>
+    <string>glide</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.4</string>
+    <key>CFBundleVersion</key>
+    <string>0.4</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>

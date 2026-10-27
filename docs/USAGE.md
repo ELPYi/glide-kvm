@@ -1,5 +1,24 @@
 # Using glide
 
+## Installing on a Mac
+
+glide isn't from the App Store, so macOS asks twice, once each:
+
+1. **Opening it**: the first time, macOS says it can't check glide. Open
+   System Settings, Privacy & Security, scroll down and click **Open Anyway**
+   next to glide. (Or, in Terminal: `xattr -dr com.apple.quarantine /Applications/glide.app`.)
+2. **Accessibility**: when sharing first starts, macOS asks to let glide
+   control the computer (it needs this to move the cursor and type, and to
+   block the Mac's own keyboard while you're on another PC). Turn glide on in
+   System Settings, Privacy & Security, Accessibility, then quit glide (its
+   menu bar icon, right-click, Quit) and open it again.
+
+Updates keep both: the app is signed the same way every time.
+
+On a Mac, the Windows key is Command and Alt is Option, in the same places
+on the keyboard. Settings are kept in `~/Library/Application Support/glide`.
+Sound sharing isn't available on a Mac yet.
+
 ## Running in the background
 
 Closing the window (X) keeps glide running in the **tray**, the icons by the

@@ -1,7 +1,10 @@
-# Every push to master: lint, test, build, and publish a GitHub release.
-# Installed copies of glide check `releases/latest` and update themselves
-# (see src/update.rs). Versions are <major>.<minor> from Cargo.toml plus the
-# run number, e.g. 0.4.17.
+# Every push to master: lint, test, build for Windows and macOS, and publish
+# a GitHub release. Installed copies of glide check `releases/latest` and
+# update themselves (see src/update.rs). Versions are <major>.<minor> from
+# Cargo.toml plus the run number, e.g. 0.4.17.
+#
+# A failed Mac build never holds up Windows: the release then just has no
+# Mac files, and Macs stay on the version they have.
 
 name: release
 
@@ -17,24 +20,22 @@ concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  GLIDE_UPDATE_REPO: ${{ github.repository }}
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     env:
-      GLIDE_UPDATE_REPO: ${{ github.repository }}
       # Self-contained exe: no Visual C++ runtime needed on the target PC.
       RUSTFLAGS: -C target-feature=+crt-static
-      CARGO_TERM_COLOR: always
     steps:
       - uses: actions/checkout@v5
 
       - name: Version
-        shell: pwsh
-        run: |
-          $line = Select-String -Path Cargo.toml -Pattern '^version = "(\d+)\.(\d+)\.' | Select-Object -First 1
-          $v = "$($line.Matches[0].Groups[1].Value).$($line.Matches[0].Groups[2].Value).${{ github.run_number }}"
-          "GLIDE_VERSION=$v" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "Version $v"
+        shell: bash
+        run: echo "GLIDE_VERSION=$(sed -nE 's/^version = "([0-9]+)\.([0-9]+)\..*/\1.\2/p' Cargo.toml | head -1).${{ github.run_number }}" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -54,24 +55,130 @@ jobs:
       - name: Build
         run: cargo build --release --bins
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/release/glide.exe
+            target/release/glide-cli.exe
+
+  macos:
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Version
+        run: echo "GLIDE_VERSION=$(sed -nE 's/^version = "([0-9]+)\.([0-9]+)\..*/\1.\2/p' Cargo.toml | head -1).${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Lint
+        run: cargo clippy --release --all-targets -- -D warnings
+
+      # Timing tests on shared Mac runners can be noisy: report, don't block.
+      - name: Test
+        continue-on-error: true
+        run: cargo test --release
+
+      - name: Build
+        run: cargo build --release --bins
+
+      # Signed with the same (self-made) certificate every time, so macOS
+      # recognizes updates as the same app and keeps its Accessibility
+      # permission. Without the certificate it's signed ad hoc, which works
+      # but asks for the permission again after each update.
+      - name: Package
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          identity="-"
+          if [ -n "${CERT_P12:-}" ]; then
+            kc="$RUNNER_TEMP/glide.keychain-db"
+            security create-keychain -p ci "$kc"
+            security set-keychain-settings "$kc"
+            security unlock-keychain -p ci "$kc"
+            echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+            security import "$RUNNER_TEMP/cert.p12" -k "$kc" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ci "$kc" > /dev/null
+            security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+            identity=$(security find-certificate -c "glide self-signed" -Z "$kc" | awk '/SHA-1 hash/ {print $3}')
+          fi
+          sign() {
+            codesign --force --sign "$identity" "$@" || {
+              echo "::warning::signing with the glide certificate failed; signing ad hoc"
+              codesign --force --sign - "$@"
+            }
+          }
+
+          app=glide.app
+          mkdir -p "$app/Contents/MacOS"
+          cp packaging/macos/Info.plist "$app/Contents/"
+          cp target/release/glide "$app/Contents/MacOS/"
+          sign "$app"
+          sign --identifier app.glide.cli target/release/glide-cli
+          codesign --verify --strict --verbose=2 "$app"
+          codesign --display --requirements - "$app"
+
+          mkdir -p out
+          ditto -c -k --keepParent "$app" out/glide-macos.zip
+          cp "$app/Contents/MacOS/glide" out/glide-macos
+          cp target/release/glide-cli out/glide-cli-macos
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+
+  publish:
+    needs: [windows, macos]
+    if: always() && needs.windows.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Version
+        run: echo "GLIDE_VERSION=$(sed -nE 's/^version = "([0-9]+)\.([0-9]+)\..*/\1.\2/p' Cargo.toml | head -1).${{ github.run_number }}" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: windows
+          path: release
+
+      - uses: actions/download-artifact@v5
+        if: needs.macos.result == 'success'
+        with:
+          name: macos
+          path: release
+
       - name: Publish
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $out = "release"
-          New-Item -ItemType Directory -Force $out | Out-Null
-          Copy-Item target/release/glide.exe, target/release/glide-cli.exe, glide.example.toml $out
-          $app = (Get-FileHash "$out/glide.exe" -Algorithm SHA256).Hash.ToLower()
-          $cli = (Get-FileHash "$out/glide-cli.exe" -Algorithm SHA256).Hash.ToLower()
-          @"
-          version = "$env:GLIDE_VERSION"
-          glide_sha256 = "$app"
-          cli_sha256 = "$cli"
-          "@ -replace '(?m)^\s+', '' | Out-File -Encoding ascii "$out/latest.toml"
-          Compress-Archive -Path "$out/glide.exe", "$out/glide-cli.exe", "$out/glide.example.toml" -DestinationPath "$out/glide-windows.zip"
-          gh release create "v$env:GLIDE_VERSION" `
-            "$out/glide-windows.zip" "$out/glide.exe" "$out/glide-cli.exe" "$out/latest.toml" `
-            --title "glide $env:GLIDE_VERSION" `
-            --notes "$(git log -1 --pretty=%B)" `
+          set -euo pipefail
+          cd release
+          cp ../glide.example.toml .
+          sha() { if [ -f "$1" ]; then sha256sum "$1" | cut -d' ' -f1; fi; }
+          cat > latest.toml <<EOF
+          version = "$GLIDE_VERSION"
+          glide_sha256 = "$(sha glide.exe)"
+          cli_sha256 = "$(sha glide-cli.exe)"
+          macos_glide_sha256 = "$(sha glide-macos)"
+          macos_cli_sha256 = "$(sha glide-cli-macos)"
+          EOF
+          sed -i 's/^[[:space:]]*//' latest.toml
+          cat latest.toml
+          zip -j glide-windows.zip glide.exe glide-cli.exe glide.example.toml
+          files=(glide-windows.zip glide.exe glide-cli.exe latest.toml)
+          for f in glide-macos.zip glide-macos glide-cli-macos; do
+            if [ -f "$f" ]; then files+=("$f"); fi
+          done
+          gh release create "v$GLIDE_VERSION" "${files[@]}" \
+            --title "glide $GLIDE_VERSION" \
+            --notes "$(git log -1 --pretty=%B)" \
             --latest

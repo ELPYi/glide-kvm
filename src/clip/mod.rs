@@ -13,6 +13,7 @@
 //! It shares the socket with the mouse, so sending is paced (a few chunks per
 //! millisecond) and never bursts ahead of a mouse packet for long.
 
+pub mod convert;
 pub mod sync;
 pub mod transfer;
 

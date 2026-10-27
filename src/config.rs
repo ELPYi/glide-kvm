@@ -242,8 +242,16 @@ fn display_name(c: &ClientEntry, i: usize) -> String {
     }
 }
 
-/// `glide.toml` next to the running executable.
+/// `glide.toml` next to the running executable. On a Mac, in
+/// `~/Library/Application Support/glide` instead: the executable is inside
+/// the signed app, which must stay unchanged.
 pub fn default_path() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Some(home) = std::env::var_os("HOME") {
+        let dir = PathBuf::from(home).join("Library/Application Support/glide");
+        let _ = std::fs::create_dir_all(&dir);
+        return dir.join(FILE_NAME);
+    }
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|d| d.join(FILE_NAME)))

@@ -34,11 +34,19 @@ raw-window-handle = "0.6"
 # translated to Rust, so it builds without a C toolchain.
 unsafe-libopus = "0.2"
 miniz_oxide = "0.8"
+# Pictures on the Mac clipboard are PNG; Windows' are bitmaps (DIB).
+png = "0.18"
 
 # Tray icon: Windows and macOS for now. On Linux it needs GTK (or a
 # StatusNotifier implementation); add it with the Linux backend.
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 tray-icon = "0.26"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# AppKit (clipboard, window, App Nap) through the Objective-C runtime.
+# CoreGraphics (input) is declared by hand in platform/macos/ffi.rs.
+objc2 = "0.6"
+libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # For implementing a COM callback (`#[implement]` expands to `windows_core::`).

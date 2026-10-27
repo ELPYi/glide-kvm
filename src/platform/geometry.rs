@@ -91,6 +91,20 @@ impl ScreenLayout {
         Some(EdgeHit { side, frac })
     }
 
+    /// Where the cursor at (x, y) moved by (dx, dy) ends up, kept on the
+    /// screens: a move off them stops at the edge of the monitor it was on.
+    /// For OSes where injected moves are absolute (macOS).
+    pub fn clamp_move(&self, x: i32, y: i32, dx: i32, dy: i32) -> (i32, i32) {
+        let (nx, ny) = (x.saturating_add(dx), y.saturating_add(dy));
+        if self.monitor_at(nx, ny).is_some() {
+            return (nx, ny);
+        }
+        match self.monitor_at(x, y).or_else(|| self.nearest(x, y)) {
+            Some(r) => (nx.clamp(r.left, r.right - 1), ny.clamp(r.top, r.bottom - 1)),
+            None => (nx, ny),
+        }
+    }
+
     /// Where to put the cursor entering through `side`, `frac` of the way along.
     /// Lands on the edge of a real monitor even in L-shaped layouts.
     pub fn entry_point(&self, side: Side, frac: f32) -> (i32, i32) {
@@ -175,6 +189,16 @@ mod tests {
         assert_eq!(l.entry_point(Side::Right, 0.0), (2559, 0));
         assert_eq!(l.entry_point(Side::Bottom, 1.0), (2559, 1439));
         assert_eq!(l.entry_point(Side::Top, 2.0), (2559, 0), "frac is clamped");
+    }
+
+    #[test]
+    fn moves_stay_on_the_screens() {
+        let l = ScreenLayout::new(vec![rect(0, 0, 1920, 1080), rect(1920, 0, 1920, 1440)]);
+        assert_eq!(l.clamp_move(100, 100, 50, -20), (150, 80));
+        assert_eq!(l.clamp_move(1900, 500, 50, 0), (1950, 500), "onto the next monitor");
+        assert_eq!(l.clamp_move(10, 500, -50, 7), (0, 507), "slides along the edge");
+        assert_eq!(l.clamp_move(100, 1070, 0, 50), (100, 1079));
+        assert_eq!(l.clamp_move(2000, 1400, 0, 50), (2000, 1439), "the taller monitor");
     }
 
     #[test]
