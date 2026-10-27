@@ -26,6 +26,7 @@
 
 pub mod audio;
 pub mod client;
+pub mod clip;
 pub mod config;
 pub mod engine;
 pub mod game;

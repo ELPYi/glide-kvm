@@ -19,6 +19,9 @@ start_on_open = true
 # from the PC for a minute). Builds you make yourself never update.
 auto_update = true
 
+# Copy on one PC, paste on another (text, formatted text, pictures).
+clipboard = true
+
 # --- Client only -------------------------------------------------------------
 # The server's address. Lets the client reach out first, so no firewall rule
 # is needed on the client.

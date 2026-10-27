@@ -198,6 +198,7 @@ impl App {
             let saved = &self.saved;
             self.engine.with(|e| {
                 e.set_switching(saved.switching);
+                e.set_clipboard(saved.clipboard);
                 e.set_hotkeys(saved.hotkeys);
                 e.set_games(saved.games.clone());
                 let _ = e.set_layout(&sides(&saved.clients));
@@ -720,6 +721,7 @@ pub fn needs_restart(old: &Config, new: &Config) -> bool {
             close_to_tray: false,
             auto_update: false,
             sign_in_set_up: false,
+            clipboard: false,
             ..c.clone()
         };
         for e in &mut c.clients {

@@ -42,6 +42,7 @@ pub fn show(ui: &mut Ui, m: &Model, draft: &mut Config, local: &mut SettingsUi, 
             card(ui, |ui| shortcuts(ui, m, actions));
         }
         card(ui, |ui| sound(ui, m, role, actions));
+        card(ui, |ui| clipboard(ui, draft));
         card(ui, |ui| gaming(ui, m, draft, local));
         card(ui, |ui| startup(ui, m, draft, actions));
         card(ui, |ui| updates(ui, m, actions));
@@ -502,6 +503,16 @@ fn updates(ui: &mut Ui, m: &Model, actions: &mut Actions) {
             }
         })
     });
+}
+
+fn clipboard(ui: &mut Ui, draft: &mut Config) {
+    section_title(ui, "Clipboard");
+    field(
+        ui,
+        "Shared clipboard",
+        Some("Copy on one PC, paste on another: text, formatted text and pictures. Passwords copied from a password manager are never shared. Turn off on any PC to keep its clipboard to itself."),
+        |ui| ui.checkbox(&mut draft.clipboard, "Share the clipboard with the other PCs"),
+    );
 }
 
 fn startup(ui: &mut Ui, m: &Model, draft: &mut Config, actions: &mut Actions) {

@@ -61,6 +61,9 @@ pub struct Config {
     /// first time; after that the Settings toggle is the user's call.
     #[serde(default)]
     pub sign_in_set_up: bool,
+    /// Copy on one PC, paste on another (text, formatted text, pictures).
+    #[serde(default = "yes")]
+    pub clipboard: bool,
     #[serde(default)]
     pub switching: SwitchSettings,
     /// Keyboard shortcuts (pressed on the sharing PC).
@@ -157,6 +160,7 @@ impl Config {
             close_to_tray: true,
             auto_update: true,
             sign_in_set_up: false,
+            clipboard: true,
             switching: SwitchSettings::default(),
             hotkeys: Hotkeys::default(),
             games: GameSettings::default(),

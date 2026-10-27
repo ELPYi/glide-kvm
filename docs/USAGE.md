@@ -102,6 +102,19 @@ It uses about 16 KB/s of network and a fraction of a percent of CPU, on its
 own threads, so the mouse is unaffected. Silence sends nothing. Both PCs need
 glide 0.4.7 or later.
 
+## Copy and paste between PCs
+
+Copy on any PC and paste on any other: text, formatted text (from browsers
+and Office) and pictures (screenshots, copied images). Whatever you copy is
+sent to the other PCs in the background, a fraction of a second for a
+screenshot, through glide's own encrypted connection.
+
+- Passwords copied from a password manager are never sent (they mark them
+  private, and glide respects that).
+- Files copied in Explorer aren't shared.
+- **Settings → Clipboard** turns it off on a PC; its copies then stay on it,
+  and it ignores the others'.
+
 ## Command line
 
 `glide-cli.exe` runs without a window, for scripts or servers:

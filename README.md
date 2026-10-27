@@ -7,6 +7,8 @@ Push the cursor off a screen edge and it continues on the next machine.
 - **Feels native**: same pointer speed on every PC, high-polling-rate mice, scan-code keys for games.
 - **Smart switching**: window drags snap instead of switching; optional edge delay; Ctrl+Shift+L locks.
 - **One set of speakers**: the other PCs' sound plays on the PC you sit at.
+- **Shared clipboard**: copy on one PC, paste on another (text, formatting, pictures).
+- **Typing follows your click**: look at or scroll another screen and keep typing where you were.
 - **No setup pain**: pair with a 6-digit code over LAN, Wi-Fi or Tailscale; no firewall rules.
 - **Updates itself** and launches at sign-in.
 
@@ -22,6 +24,6 @@ Windows today; Linux and macOS are planned.
 
 ## Docs
 
-- [Using glide](docs/USAGE.md): tray, startup, updates, shortcuts, sound, settings, command line
+- [Using glide](docs/USAGE.md): tray, startup, updates, shortcuts, sound, clipboard, settings, command line
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Development](docs/DEVELOPMENT.md) and [Architecture](docs/ARCHITECTURE.md)

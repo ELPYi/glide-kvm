@@ -52,6 +52,9 @@ config, platform and networking together.
 | `src/audio/playout.rs` | **Pure** jitter buffer: adaptive depth, loss concealment, clock-drift nudging | `codec` |
 | `src/audio/share.rs` | Client side: capture, cut into frames, encode, send; quiet during silence | `codec`, `Uplink` |
 | `src/audio/play.rs` | Server side: per-PC playout buffers, mixing, opening the speakers only while sound arrives | `playout` |
+| `src/clip/mod.rs` | Shared clipboard: `ClipData` (text, HTML, DIB picture) and its deflated wire form | `miniz_oxide` |
+| `src/clip/transfer.rs` | **Pure** chunked transfer over UDP: window, cumulative acks, resends only the holes | — |
+| `src/clip/sync.rs` | Clipboard worker: local copies out to every PC, arrivals onto this one (the server relays) | `transfer` |
 | `src/update.rs` | Over-the-air updates from GitHub Releases: version compare, checksum, stage/swap files, background checker | `platform` (`http_get`) |
 | `src/logging.rs` | `log!` macro + in-memory log for the Logs tab | `platform` (clock) |
 | `src/platform/mod.rs` | The OS contract: `Desktop` trait, `start_capture`, `system` | — |
@@ -255,6 +258,8 @@ typing returns to the server (`keyboard_lost`).
 | `glide-client` | `client/mod.rs` | Everything on the client (time-critical priority) |
 | `glide-audio-share` | `audio/share.rs` | Client: record, encode and send this PC's sound (normal priority) |
 | `glide-audio-play` | `audio/play.rs` | Server: decode, buffer, mix and play the other PCs' sound (normal priority) |
+| `glide-clipboard` | `clip/sync.rs` | Both: sends and receives clipboards, paced (sleeps between copies) |
+| `glide-clipboard-os` | `platform/windows/clipboard.rs` | Both: clipboard listener window; reads copies, writes arrivals |
 | main | `gui` | The window; reads status 4×/s |
 
 Server state sits behind one `Mutex`. It's only ever held for microseconds
@@ -274,9 +279,12 @@ packet = [magic 'G'][dir][session u64][counter u64]  ++  ChaCha20-Poly1305(messa
   new `session` (its start time in µs), so keys rotate per run.
 - **Replay protection**: a 64-packet sliding window over `counter`.
 - **Server → client**: `Heartbeat{sent_micros, wants_sound}`, `Motion{dx,dy}` (unreliable),
-  `Reliable{seq, Enter{side, frac, feel} | Leave | Input}`.
+  `Reliable{seq, Enter{side, frac, feel} | Leave | Input}`, `Clip`.
 - **Client → server**: `Pong{instance, echo_micros}` (gives RTT),
-  `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock`, `Audio{stream, seq, opus}`.
+  `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock`, `Audio{stream, seq, opus}`, `Clip`.
+- **Clipboard** (`Clip`, both ways): `Chunk{id, index, total, data}` (≤1100 bytes of the
+  deflated clipboard) and `Ack{id, next}` (every chunk below `next` arrived). Paced at ~4 chunks
+  per ms so mouse packets never queue behind a burst. Older builds ignore the unknown tag.
 - **Knock / firewall**: a client with `server_address` set sends `Knock`
   (sealed with session 0) every 500 ms until connected. Its firewall then
   treats the server's packets as replies, so **no inbound rule is needed**.

@@ -39,6 +39,10 @@ pub fn open_speaker() -> Result<Box<dyn crate::audio::AudioOut>> {
     bail!(MSG)
 }
 
+pub fn open_clipboard(_on_copy: crate::clip::sync::OnCopy) -> Result<Box<dyn crate::clip::sync::Clipboard>> {
+    bail!(MSG)
+}
+
 pub fn prioritize_traffic(_sock: &std::net::UdpSocket, _dest: std::net::SocketAddr) -> bool {
     false
 }

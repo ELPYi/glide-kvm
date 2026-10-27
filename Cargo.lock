@@ -1673,6 +1673,7 @@ dependencies = [
  "chacha20poly1305",
  "eframe",
  "local-ip-address",
+ "miniz_oxide 0.8.9",
  "raw-window-handle",
  "serde",
  "sha2",

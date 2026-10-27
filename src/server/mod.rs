@@ -21,7 +21,7 @@ pub mod switcher;
 
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -29,6 +29,7 @@ use anyhow::{bail, Result};
 
 use crate::audio::play::Player;
 use crate::audio::AudioSettings;
+use crate::clip::sync::{ClipInbox, ClipMsg, ClipNet};
 use crate::config::{ClientEntry, Config, SwitchSettings};
 use crate::game::{self, GameSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
@@ -106,6 +107,8 @@ pub struct Server {
     games: Mutex<GameSettings>,
     /// Plays the other PCs' sound (set by the engine; tests run without).
     player: Mutex<Option<Player>>,
+    /// Where clipboard packets go (set by the engine; tests run without).
+    clip: Mutex<Option<ClipInbox>>,
     desktop: Arc<dyn Desktop>,
     running: AtomicBool,
     threads: Mutex<Vec<JoinHandle<()>>>,
@@ -141,6 +144,7 @@ impl Server {
             grab: Arc::new(AtomicBool::new(false)),
             games: Mutex::new(cfg.games.clone()),
             player: Mutex::new(None),
+            clip: Mutex::new(None),
             desktop,
             running: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
@@ -236,6 +240,11 @@ impl Server {
     /// Play the other PCs' sound with `player` (`None`: don't ask for it).
     pub fn set_player(&self, player: Option<Player>) {
         *self.player() = player;
+    }
+
+    /// Hand clipboard packets from clients to the clipboard worker.
+    pub fn set_clip_inbox(&self, inbox: Option<ClipInbox>) {
+        *self.clip.lock().unwrap_or_else(|e| e.into_inner()) = inbox;
     }
 
     /// Change sound settings live (play on/off, volume).
@@ -581,6 +590,13 @@ impl Server {
             }
             return;
         }
+        // Clipboards too: straight to their worker, off the input path.
+        if let ClientMsg::Clip(m) = msg {
+            if let Some(inbox) = self.clip.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                inbox.push(src, m);
+            }
+            return;
+        }
 
         let mut st = self.lock();
         let Some(i) = st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
@@ -631,7 +647,7 @@ impl Server {
                     self.apply_switch(&mut st, switch);
                 }
             }
-            ClientMsg::Knock | ClientMsg::Audio { .. } => {}
+            ClientMsg::Knock | ClientMsg::Audio { .. } | ClientMsg::Clip(_) => {}
         }
     }
 
@@ -800,6 +816,29 @@ impl Server {
                 }
             }
             std::thread::sleep(POLL);
+        }
+    }
+}
+
+/// The clipboard worker's way to the clients: every connected one.
+pub struct ServerClipNet(Weak<Server>);
+
+impl ServerClipNet {
+    pub fn new(server: &Arc<Server>) -> ServerClipNet {
+        ServerClipNet(Arc::downgrade(server))
+    }
+}
+
+impl ClipNet for ServerClipNet {
+    fn peers(&self) -> Vec<SocketAddr> {
+        let Some(s) = self.0.upgrade() else { return Vec::new() };
+        let st = s.lock();
+        st.peers.iter().filter(|p| p.alive()).filter_map(|p| p.addr).collect()
+    }
+
+    fn send(&self, to: SocketAddr, msg: ClipMsg) {
+        if let Some(s) = self.0.upgrade() {
+            s.send(to, &ServerMsg::Clip(msg));
         }
     }
 }

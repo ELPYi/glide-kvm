@@ -13,12 +13,13 @@ use crate::audio::play::Player;
 use crate::audio::share::Sharer;
 use crate::audio::AudioSettings;
 use crate::client::{self, ClientHandle, ClientOptions};
+use crate::clip::sync::ClipSync;
 use crate::config::{ClientEntry, Config, Role, SwitchSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
 use crate::input::Side;
 use crate::log;
 use crate::platform::{self, CaptureHandle};
-use crate::server::Server;
+use crate::server::{Server, ServerClipNet};
 use crate::status::EngineStatus;
 
 pub struct Engine {
@@ -29,11 +30,13 @@ enum Inner {
     Server {
         server: Arc<Server>,
         capture: Option<CaptureHandle>,
+        clip: Option<ClipSync>,
     },
     Client {
         handle: Option<ClientHandle>,
         /// Sends this PC's sound (stopped before the client).
         sharer: Option<Sharer>,
+        clip: Option<ClipSync>,
     },
 }
 
@@ -57,6 +60,12 @@ impl Engine {
                     }
                 };
                 server.set_player(Some(Player::start(cfg.audio, Box::new(platform::open_speaker))));
+                let clip = ClipSync::start(
+                    cfg.clipboard,
+                    Box::new(ServerClipNet::new(&server)),
+                    Box::new(platform::open_clipboard),
+                );
+                server.set_clip_inbox(Some(clip.inbox()));
                 log!("sharing this keyboard and mouse on UDP {}", cfg.port);
                 for c in &cfg.clients {
                     log!("  {} ({}) is {}", c.name, c.address, side_phrase(c.side));
@@ -65,6 +74,7 @@ impl Engine {
                 Inner::Server {
                     server,
                     capture: Some(capture),
+                    clip: Some(clip),
                 }
             }
             Role::Client => {
@@ -86,6 +96,11 @@ impl Engine {
                         None
                     }
                 };
+                let clip = handle.audio_sender().ok().map(|link| {
+                    let clip = ClipSync::start(cfg.clipboard, Box::new(link), Box::new(platform::open_clipboard));
+                    handle.set_clip_inbox(Some(clip.inbox()));
+                    clip
+                });
                 match cfg.server_address.as_deref().filter(|a| !a.trim().is_empty()) {
                     Some(a) => log!("waiting for the server at {a} (UDP {})", cfg.port),
                     None => log!("waiting for the server on UDP {}", cfg.port),
@@ -93,6 +108,7 @@ impl Engine {
                 Inner::Client {
                     handle: Some(handle),
                     sharer,
+                    clip,
                 }
             }
         };
@@ -105,6 +121,7 @@ impl Engine {
             Inner::Client {
                 handle: Some(c),
                 sharer,
+                ..
             } => {
                 let mut s = c.status();
                 s.sending_sound = s.connected && sharer.as_ref().is_some_and(Sharer::sending);
@@ -140,6 +157,14 @@ impl Engine {
 
     /// Change sound settings live: playing them here (server), sending
     /// this PC's (client).
+    /// Turn clipboard sharing on or off live.
+    pub fn set_clipboard(&self, on: bool) {
+        match &self.inner {
+            Inner::Server { clip: Some(c), .. } | Inner::Client { clip: Some(c), .. } => c.set_enabled(on),
+            _ => {}
+        }
+    }
+
     pub fn set_audio(&self, settings: AudioSettings) {
         match &self.inner {
             Inner::Server { server, .. } => server.set_audio(settings),
@@ -216,15 +241,18 @@ impl Engine {
 
     fn shutdown(&mut self) {
         match &mut self.inner {
-            Inner::Server { server, capture } => {
+            Inner::Server { server, capture, clip } => {
+                server.set_clip_inbox(None);
+                drop(clip.take());
                 if let Some(c) = capture.take() {
                     c.stop(); // restore normal local input first
                     server.stop();
                     log!("stopped");
                 }
             }
-            Inner::Client { handle, sharer } => {
+            Inner::Client { handle, sharer, clip } => {
                 drop(sharer.take());
+                drop(clip.take());
                 if let Some(h) = handle.take() {
                     h.stop();
                     log!("stopped");

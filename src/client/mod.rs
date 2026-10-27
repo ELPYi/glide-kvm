@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use crate::audio::Uplink;
+use crate::clip::sync::{ClipInbox, ClipMsg, ClipNet};
 use crate::game::{self, GameSettings};
 use crate::input::{Button, InputBlock, InputEvent, Side};
 use crate::log;
@@ -74,6 +75,8 @@ pub struct AudioLink {
     /// Packet counter shared with the client thread, so the two never
     /// reuse a nonce. Never reset (a new session doesn't need it to be).
     counter: AtomicU64,
+    /// Where clipboard packets from the server go.
+    clip: Mutex<Option<ClipInbox>>,
 }
 
 struct AudioTarget {
@@ -94,18 +97,36 @@ impl Uplink for AudioSender {
     }
 
     fn send(&self, stream: u32, seq: u32, opus: &[u8]) {
-        let guard = self.link.target.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(t) = guard.as_ref() else { return };
-        let ctr = self.link.counter.fetch_add(1, Ordering::Relaxed) + 1;
-        let msg = ClientMsg::Audio {
+        self.send_msg(&ClientMsg::Audio {
             stream,
             seq,
             opus: opus.to_vec(),
-        };
+        });
+    }
+}
+
+impl AudioSender {
+    fn send_msg(&self, msg: &ClientMsg) {
+        let guard = self.link.target.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(t) = guard.as_ref() else { return };
+        let ctr = self.link.counter.fetch_add(1, Ordering::Relaxed) + 1;
         let pkt = crypto::seal(&t.cipher, crypto::DIR_TO_SERVER, t.session, ctr, &msg.encode());
         let server = t.server;
         drop(guard);
         let _ = self.sock.send_to(&pkt, server);
+    }
+}
+
+/// The clipboard's way to the server (the only PC a client shares with;
+/// the server passes clipboards on to any other clients).
+impl ClipNet for AudioSender {
+    fn peers(&self) -> Vec<SocketAddr> {
+        let guard = self.link.target.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().map(|t| t.server).into_iter().collect()
+    }
+
+    fn send(&self, _to: SocketAddr, msg: ClipMsg) {
+        self.send_msg(&ClientMsg::Clip(msg));
     }
 }
 
@@ -133,7 +154,12 @@ impl ClientHandle {
         *self.games.lock().unwrap_or_else(|e| e.into_inner()) = games;
     }
 
-    /// A way for the sound sender to reach the server.
+    /// Hand clipboard packets from the server to the clipboard worker.
+    pub fn set_clip_inbox(&self, inbox: Option<ClipInbox>) {
+        *self.audio.clip.lock().unwrap_or_else(|e| e.into_inner()) = inbox;
+    }
+
+    /// A way for the sound sender (or the clipboard) to reach the server.
     pub fn audio_sender(&self) -> Result<AudioSender> {
         Ok(AudioSender {
             link: self.audio.clone(),
@@ -515,6 +541,11 @@ impl Client {
                 self.send(&ClientMsg::Ack {
                     seq: self.inbox.ack_point(),
                 });
+            }
+            ServerMsg::Clip(m) => {
+                if let Some(inbox) = self.audio.clip.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    inbox.push(src, m);
+                }
             }
         }
     }

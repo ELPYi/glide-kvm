@@ -14,6 +14,7 @@
 //! fn http_get(url) -> Result<Vec<u8>>  // HTTPS download (updates)
 //! fn open_loopback(mute) -> Result<Box<dyn AudioIn>>  // what this PC plays
 //! fn open_speaker() -> Result<Box<dyn AudioOut>>   // play sound here
+//! fn open_clipboard(on_copy) -> Result<Box<dyn Clipboard>>  // shared clipboard
 //! fn raise_process_priority()
 //! mod system {
 //!     fn autostart_enabled() -> bool
@@ -125,7 +126,7 @@ mod unsupported;
 mod windows;
 #[cfg(windows)]
 pub use self::windows::{
-    boost_latency_thread, desktop, http_get, local_time, open_loopback, open_speaker, precise_sleep,
+    boost_latency_thread, desktop, http_get, local_time, open_clipboard, open_loopback, open_speaker, precise_sleep,
     prioritize_traffic, raise_process_priority, selftest, start_capture, system,
 };
 
@@ -133,7 +134,7 @@ pub use self::windows::{
 mod linux;
 #[cfg(target_os = "linux")]
 pub use self::linux::{
-    boost_latency_thread, desktop, http_get, local_time, open_loopback, open_speaker, precise_sleep,
+    boost_latency_thread, desktop, http_get, local_time, open_clipboard, open_loopback, open_speaker, precise_sleep,
     prioritize_traffic, raise_process_priority, selftest, start_capture, system,
 };
 
@@ -141,6 +142,6 @@ pub use self::linux::{
 mod macos;
 #[cfg(target_os = "macos")]
 pub use self::macos::{
-    boost_latency_thread, desktop, http_get, local_time, open_loopback, open_speaker, precise_sleep,
+    boost_latency_thread, desktop, http_get, local_time, open_clipboard, open_loopback, open_speaker, precise_sleep,
     prioritize_traffic, raise_process_priority, selftest, start_capture, system,
 };

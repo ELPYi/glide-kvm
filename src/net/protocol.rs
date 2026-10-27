@@ -7,6 +7,7 @@
 //! not: decoders ignore trailing bytes and unknown tags, so a field appended
 //! to the end (read as optional) or a new message keeps old builds working.
 
+use crate::clip::sync::ClipMsg;
 use crate::input::{Button, InputBlock, InputEvent, PointerFeel, Side};
 
 /// Server -> client.
@@ -20,6 +21,8 @@ pub enum ServerMsg {
     Motion { dx: i32, dy: i32 },
     /// Delivered in order, acked and retransmitted (see [`super::reliable`]).
     Reliable { seq: u32, ev: ReliableEv },
+    /// Part of a clipboard, or an ack for one (see `crate::clip`).
+    Clip(ClipMsg),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +88,8 @@ pub enum ClientMsg {
     /// 10 ms of this PC's sound, Opus-compressed (see `crate::audio`).
     /// `stream` changes when the client restarts; `seq` counts frames.
     Audio { stream: u32, seq: u32, opus: Vec<u8> },
+    /// Part of a clipboard, or an ack for one (see `crate::clip`).
+    Clip(ClipMsg),
 }
 
 struct W(Vec<u8>);
@@ -146,6 +151,34 @@ impl R<'_> {
     fn side(&mut self) -> Option<Side> {
         Side::from_u8(self.u8()?)
     }
+}
+
+fn write_clip(w: &mut W, m: &ClipMsg) {
+    match m {
+        ClipMsg::Chunk { id, index, total, data } => {
+            w.u8(1).u32(*id).u32(*index).u32(*total);
+            w.0.extend_from_slice(data);
+        }
+        ClipMsg::Ack { id, next } => {
+            w.u8(2).u32(*id).u32(*next);
+        }
+    }
+}
+
+fn read_clip(r: &mut R) -> Option<ClipMsg> {
+    Some(match r.u8()? {
+        1 => ClipMsg::Chunk {
+            id: r.u32()?,
+            index: r.u32()?,
+            total: r.u32()?,
+            data: r.0.to_vec(),
+        },
+        2 => ClipMsg::Ack {
+            id: r.u32()?,
+            next: r.u32()?,
+        },
+        _ => return None,
+    })
 }
 
 fn write_input(w: &mut W, ev: &InputEvent) {
@@ -222,6 +255,10 @@ impl ServerMsg {
                     }
                 }
             }
+            ServerMsg::Clip(m) => {
+                w.u8(0x04);
+                write_clip(&mut w, m);
+            }
         }
         w.0
     }
@@ -258,6 +295,7 @@ impl ServerMsg {
                 };
                 ServerMsg::Reliable { seq, ev }
             }
+            0x04 => ServerMsg::Clip(read_clip(&mut r)?),
             _ => return None,
         })
     }
@@ -290,6 +328,10 @@ impl ClientMsg {
                 w.u8(0x25).u32(*stream).u32(*seq);
                 w.0.extend_from_slice(opus);
             }
+            ClientMsg::Clip(m) => {
+                w.u8(0x26);
+                write_clip(&mut w, m);
+            }
         }
         w.0
     }
@@ -313,6 +355,7 @@ impl ClientMsg {
                 seq: r.u32()?,
                 opus: r.0.to_vec(),
             },
+            0x26 => ClientMsg::Clip(read_clip(&mut r)?),
             _ => return None,
         })
     }
@@ -376,6 +419,13 @@ mod tests {
                 seq: 11,
                 ev: ReliableEv::Input(InputEvent::Wheel { dx: 0, dy: -120 }),
             },
+            ServerMsg::Clip(ClipMsg::Chunk {
+                id: 5,
+                index: 2,
+                total: 3,
+                data: vec![9; 1100],
+            }),
+            ServerMsg::Clip(ClipMsg::Ack { id: 5, next: 3 }),
         ];
         for m in msgs {
             assert_eq!(ServerMsg::decode(&m.encode()), Some(m));
@@ -406,6 +456,13 @@ mod tests {
                 seq: 4_000_000_000,
                 opus: vec![1, 2, 3, 250],
             },
+            ClientMsg::Clip(ClipMsg::Chunk {
+                id: u32::MAX,
+                index: 0,
+                total: 1,
+                data: Vec::new(),
+            }),
+            ClientMsg::Clip(ClipMsg::Ack { id: 1, next: 0 }),
         ];
         for m in msgs {
             assert_eq!(ClientMsg::decode(&m.encode()), Some(m));

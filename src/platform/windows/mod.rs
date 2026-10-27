@@ -16,12 +16,14 @@
 //! - [`osd`]: brief on-screen confirmations ("Switching locked")
 //! - [`http`]: HTTPS downloads for updates (WinHTTP)
 //! - [`audio`]: recording what this PC plays, and playing sound (WASAPI)
+//! - [`clipboard`]: noticing copies, and putting other PCs' clipboards here
 //! - [`selftest`]: checks the assumptions capture relies on
 
 mod admin;
 mod audio;
 mod blocking;
 mod capture;
+mod clipboard;
 mod cursor;
 mod desktop;
 mod foreground;
@@ -43,6 +45,7 @@ use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS
 
 pub use audio::{open_loopback, open_speaker};
 pub use capture::start_capture;
+pub use clipboard::open_clipboard;
 pub use desktop::desktop;
 pub use http::http_get;
 pub use qos::prioritize as prioritize_traffic;
