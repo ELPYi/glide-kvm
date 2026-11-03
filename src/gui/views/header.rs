@@ -70,20 +70,20 @@ pub fn show(ui: &mut Ui, m: &Model, actions: &mut Actions) {
     }
 }
 
-/// "glide" plus a lime block, like a text cursor mid-glide.
+/// The app icon, then "glide".
 fn wordmark(ui: &mut Ui) {
-    let r = ui.label(
+    let logo = theme::logo(ui.ctx());
+    ui.add(egui::Image::from_texture(egui::load::SizedTexture::new(
+        logo.id(),
+        egui::vec2(30.0, 30.0),
+    )));
+    ui.add_space(2.0);
+    ui.label(
         RichText::new("glide")
             .font(theme::heavy(22.0))
             .color(theme::TEXT_STRONG),
     );
-    let rect = r.rect;
-    let block = egui::Rect::from_min_size(
-        egui::pos2(rect.right() + 3.0, rect.center().y - 6.0),
-        egui::vec2(8.0, 14.0),
-    );
-    ui.painter().rect_filled(block, 1.0, theme::ACCENT);
-    ui.add_space(12.0);
+    ui.add_space(8.0);
 }
 
 /// A tab: plain text, with a lime underline when selected.

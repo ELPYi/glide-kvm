@@ -8,8 +8,8 @@ glide-32.png / glide-64.png (the tray). All are committed, so builds don't
 need Python; rerun this after changing the art.
 
 The art: two screens side by side on the app's ink tile, and a signal-lime
-cursor gliding across the gap between them, speed lines behind it. Small
-sizes drop the detail that would only blur (the gap, then a speed line).
+cursor gliding across the gap between them, speed lines behind it. It's the
+same drawing at every size, so the taskbar, tray and app header all match.
 Palette from src/gui/theme.rs.
 """
 
@@ -43,38 +43,31 @@ def draw(size):
     img = Image.new("RGBA", (n, n), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
 
-    # The tile, with a hairline edge so it reads on a dark taskbar too.
-    pad = (8 if size >= 32 else 4) * u
+    # The tile, with an edge so it reads on a dark taskbar too.
+    pad = 8 * u
     d.rounded_rectangle([pad, pad, n - pad, n - pad], radius=44 * u, fill=EDGE)
     edge = max(SS, 4 * u)
     d.rounded_rectangle(
         [pad + edge, pad + edge, n - pad - edge, n - pad - edge], radius=44 * u - edge, fill=INK
     )
 
-    # Two screens with a gap between them (only where it can show).
-    if size >= 24:
-        top, bottom = 62 * u, 178 * u
-        gap = 14 * u if size >= 40 else 18 * u
-        mid = 128 * u
-        d.rounded_rectangle([40 * u, top, mid - gap / 2, bottom], radius=12 * u, fill=LEFT_SCREEN)
-        d.rounded_rectangle([mid + gap / 2, top, 216 * u, bottom], radius=12 * u, fill=RIGHT_SCREEN)
-        # Stands.
-        d.rounded_rectangle([64 * u, 190 * u, mid - gap / 2 - 24 * u, 200 * u], radius=5 * u, fill=LEFT_SCREEN)
-        d.rounded_rectangle([mid + gap / 2 + 24 * u, 190 * u, 192 * u, 200 * u], radius=5 * u, fill=RIGHT_SCREEN)
+    # Two screens with a gap between them.
+    top, bottom = 62 * u, 178 * u
+    gap, mid = 16 * u, 128 * u
+    d.rounded_rectangle([40 * u, top, mid - gap / 2, bottom], radius=12 * u, fill=LEFT_SCREEN)
+    d.rounded_rectangle([mid + gap / 2, top, 216 * u, bottom], radius=12 * u, fill=RIGHT_SCREEN)
+    # Stands.
+    d.rounded_rectangle([64 * u, 190 * u, mid - gap / 2 - 24 * u, 200 * u], radius=5 * u, fill=LEFT_SCREEN)
+    d.rounded_rectangle([mid + gap / 2 + 24 * u, 190 * u, 192 * u, 200 * u], radius=5 * u, fill=RIGHT_SCREEN)
 
     # Speed lines, then the dart crossing the gap.
     # (offset from the dart's line, start x, end x, thickness)
-    if size >= 32:
-        lines = [(-26, 70, 112, 14), (0, 52, 118, 16), (26, 78, 112, 14)]
-    elif size > 16:
-        lines = [(-22, 60, 112, 22), (22, 70, 112, 22)]
-    else:
-        lines = [(0, 44, 112, 30)]
+    lines = [(-28, 70, 112, 16), (0, 52, 118, 18), (28, 78, 112, 16)]
     cy = 122 * u
     for dy, x0, x1, width in lines:
         y = cy + dy * u
         d.rounded_rectangle([x0 * u, y - width * u / 2, x1 * u, y + width * u / 2], radius=width * u / 2, fill=TRAIL)
-    d.polygon(dart(160 * u, cy, 104 * u if size >= 32 else 124 * u, math.radians(-10)), fill=ACCENT)
+    d.polygon(dart(160 * u, cy, 108 * u, math.radians(-10)), fill=ACCENT)
 
     return img.resize((size, size), Image.LANCZOS)
 

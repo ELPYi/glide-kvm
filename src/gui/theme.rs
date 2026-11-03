@@ -243,6 +243,19 @@ pub fn tray_icon() -> IconData {
     }
 }
 
+/// The icon as a texture, for the app header (made once, then reused).
+pub fn logo(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::unique("glide-logo");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let icon = decode_icon(include_bytes!("../../assets/icon/glide-64.png"));
+    let image = egui::ColorImage::from_rgba_unmultiplied([icon.width as usize, icon.height as usize], &icon.rgba);
+    let t = ctx.load_texture("glide-logo", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}
+
 fn decode_icon(png_bytes: &[u8]) -> IconData {
     let decoded = (|| {
         let mut dec = png::Decoder::new(std::io::Cursor::new(png_bytes));
