@@ -19,6 +19,9 @@ const RTT_SAMPLES: usize = 64;
 /// Below this typical round trip, the link is wired-class and gets faster
 /// mouse updates (see `pacer`).
 const FAST_LINK_MS: f32 = 1.5;
+/// Pongs in a row (~100 ms) saying "not being controlled" while we are
+/// controlling it before we believe it (one could be stale, reordered).
+const LET_GO_PONGS: u32 = 4;
 
 pub struct Peer {
     pub entry: ClientEntry,
@@ -36,6 +39,8 @@ pub struct Peer {
     pub last_heartbeat: Option<Instant>,
     /// Latest report: it can't accept input (from every pong).
     pub blocked: Option<InputBlock>,
+    /// Pongs in a row that said it isn't being controlled while it should be.
+    let_go: u32,
     rtt: RttStats,
 }
 
@@ -52,12 +57,31 @@ impl Peer {
             outbox: Outbox::new(OUTBOX_CAPACITY),
             last_heartbeat: None,
             blocked: None,
+            let_go: 0,
             rtt: RttStats::default(),
         }
     }
 
     pub fn alive(&self) -> bool {
         self.last_pong.is_some_and(|t| t.elapsed() < ALIVE_TIMEOUT)
+    }
+
+    /// One pong's view of control. True once the client has said for a while
+    /// that it isn't being controlled while we're controlling it, with
+    /// everything we sent acknowledged (so it did get the Enter). It let go
+    /// on its own (it stopped hearing us for a moment, say): left alone, the
+    /// cursor would be hidden here and ignored there.
+    pub fn let_go(&mut self, controlling: bool, client_active: Option<bool>) -> bool {
+        if controlling && client_active == Some(false) && self.outbox.is_empty() {
+            self.let_go += 1;
+        } else if !controlling || client_active == Some(true) {
+            self.let_go = 0;
+        }
+        if self.let_go < LET_GO_PONGS {
+            return false;
+        }
+        self.let_go = 0;
+        true
     }
 
     /// The client restarted: its counters and expected sequence start over.

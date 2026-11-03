@@ -4,11 +4,16 @@
   usual causes, won't cross into a PC in these states, and takes control
   back within a fraction of a second if one happens while you're on it:
   - the other PC's lock screen, UAC prompt or Ctrl+Alt+Del screen is
-    showing (Windows lets no program control those);
+    showing (Windows lets no program control those), or a Mac's lock screen;
   - an admin window (Task Manager, an installer) is in front there and glide
-    isn't running as administrator on it.
+    isn't running as administrator on it;
+  - the two PCs disagree about which one has the mouse (one stopped hearing
+    the other for a moment, on Wi-Fi say). Each tells the other which it
+    thinks, so either one notices and the mouse comes back to the PC you're at.
 
-  The Devices tab shows "Locked" or "Admin window" when that's the case.
+  The Devices tab shows "Locked" or "Admin window" when that's the case. If
+  it still happens, open the Logs tab on both PCs right afterwards: the
+  lines from that moment say what each one saw.
 
 - **A PC shows "Offline"**: check that glide is open there. If it was set
   up by hand, pair it again.

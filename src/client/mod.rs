@@ -53,6 +53,9 @@ const BLOCK_CHECK_EVERY: Duration = Duration::from_millis(100);
 const POLL: Duration = Duration::from_millis(100);
 /// How often to check for a game in focus while this PC is being controlled.
 const GAME_CHECK_EVERY: Duration = Duration::from_millis(250);
+/// Heartbeats in a row (~100 ms) saying the server isn't controlling this PC,
+/// while it thinks it is, before letting go (one could be stale, reordered).
+const LET_GO_HEARTBEATS: u32 = 4;
 
 pub struct ClientOptions {
     pub secret: String,
@@ -246,6 +249,9 @@ struct Client {
     game_checked: Option<Instant>,
     keys_down: HashSet<u16>,
     buttons_down: HashSet<Button>,
+    /// Heartbeats in a row saying the server isn't controlling this PC
+    /// while it's active here.
+    let_go: u32,
 }
 
 impl Client {
@@ -285,6 +291,7 @@ impl Client {
             game_checked: None,
             keys_down: HashSet::new(),
             buttons_down: HashSet::new(),
+            let_go: 0,
         }
     }
 
@@ -523,12 +530,15 @@ impl Client {
             ServerMsg::Heartbeat {
                 sent_micros,
                 wants_sound,
+                controlling,
             } => {
                 self.audio.wanted.store(wants_sound, Ordering::Relaxed);
+                self.check_control(controlling);
                 self.send(&ClientMsg::Pong {
                     instance: self.instance,
                     echo_micros: sent_micros,
                     blocked: self.block,
+                    active: Some(self.active),
                 });
             }
             ServerMsg::Motion { dx, dy } => self.on_motion(dx, dy),
@@ -548,6 +558,28 @@ impl Client {
                 }
             }
         }
+    }
+
+    /// The server has stopped controlling this PC without a Leave getting
+    /// through: let go, as if it had.
+    fn check_control(&mut self, controlling: Option<bool>) {
+        if self.active && controlling == Some(false) {
+            self.let_go += 1;
+        } else {
+            self.let_go = 0;
+        }
+        if self.let_go >= LET_GO_HEARTBEATS {
+            log!("the server isn't controlling this PC any more; letting go");
+            self.leave();
+        }
+    }
+
+    /// Control went back to the server.
+    fn leave(&mut self) {
+        self.let_go = 0;
+        self.deactivate();
+        self.hide_cursor();
+        self.publish_status();
     }
 
     fn adopt_session(&mut self, session: u64, cipher: Cipher, src: SocketAddr) {
@@ -602,10 +634,11 @@ impl Client {
                 self.publish_status();
             }
             ReliableEv::Leave => {
-                self.deactivate();
-                self.hide_cursor();
-                log!("back to the server");
-                self.publish_status();
+                // Already let go if the heartbeats got here first.
+                if self.active {
+                    log!("back to the server");
+                }
+                self.leave();
             }
             ReliableEv::Notice(n) => {
                 if self.active {

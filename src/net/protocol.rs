@@ -16,7 +16,14 @@ pub enum ServerMsg {
     /// Sent every 25-200 ms; the client echoes `sent_micros` back for RTT.
     /// `wants_sound`: send this PC your sound (appended in 0.4.7; older
     /// servers don't send it, which reads as no).
-    Heartbeat { sent_micros: u64, wants_sound: bool },
+    /// `controlling`: whether the server thinks it's controlling this PC
+    /// (appended in 0.4.18; `None` from older servers). Lets the two sides
+    /// notice they disagree instead of stranding the cursor.
+    Heartbeat {
+        sent_micros: u64,
+        wants_sound: bool,
+        controlling: Option<bool>,
+    },
     /// Unreliable: a lost motion packet is just a skipped pixel or two.
     Motion { dx: i32, dy: i32 },
     /// Delivered in order, acked and retransmitted (see [`super::reliable`]).
@@ -76,6 +83,9 @@ pub enum ClientMsg {
         instance: u64,
         echo_micros: u64,
         blocked: Option<InputBlock>,
+        /// Whether this PC is being controlled (appended in 0.4.18; `None`
+        /// from older clients).
+        active: Option<bool>,
     },
     /// Cumulative: every reliable message up to and including `seq` arrived.
     Ack { seq: u32 },
@@ -227,8 +237,12 @@ impl ServerMsg {
             ServerMsg::Heartbeat {
                 sent_micros,
                 wants_sound,
+                controlling,
             } => {
                 w.u8(0x01).u64(*sent_micros).u8(*wants_sound as u8);
+                if let Some(c) = controlling {
+                    w.u8(*c as u8);
+                }
             }
             ServerMsg::Motion { dx, dy } => {
                 w.u8(0x02).i32(*dx).i32(*dy);
@@ -269,6 +283,7 @@ impl ServerMsg {
             0x01 => ServerMsg::Heartbeat {
                 sent_micros: r.u64()?,
                 wants_sound: r.u8().is_some_and(|b| b != 0),
+                controlling: r.u8().map(|b| b != 0),
             },
             0x02 => ServerMsg::Motion {
                 dx: r.i32()?,
@@ -309,11 +324,15 @@ impl ClientMsg {
                 instance,
                 echo_micros,
                 blocked,
+                active,
             } => {
                 w.u8(0x21)
                     .u64(*instance)
                     .u64(*echo_micros)
                     .u8(blocked.map_or(0, InputBlock::to_u8));
+                if let Some(a) = active {
+                    w.u8(*a as u8);
+                }
             }
             ClientMsg::Ack { seq } => {
                 w.u8(0x22).u32(*seq);
@@ -343,6 +362,7 @@ impl ClientMsg {
                 instance: r.u64()?,
                 echo_micros: r.u64()?,
                 blocked: InputBlock::from_u8(r.u8()?),
+                active: r.u8().map(|b| b != 0),
             },
             0x22 => ClientMsg::Ack { seq: r.u32()? },
             0x23 => ClientMsg::EdgeLeave {
@@ -371,10 +391,17 @@ mod tests {
             ServerMsg::Heartbeat {
                 sent_micros: 1_700_000_000_000_000,
                 wants_sound: true,
+                controlling: Some(true),
             },
             ServerMsg::Heartbeat {
                 sent_micros: 5,
                 wants_sound: false,
+                controlling: Some(false),
+            },
+            ServerMsg::Heartbeat {
+                sent_micros: 5,
+                wants_sound: true,
+                controlling: None,
             },
             ServerMsg::Motion { dx: -5, dy: 1200 },
             ServerMsg::Reliable {
@@ -439,11 +466,19 @@ mod tests {
                 instance: 123456789,
                 echo_micros: 42,
                 blocked: None,
+                active: None,
             },
             ClientMsg::Pong {
                 instance: 1,
                 echo_micros: 2,
                 blocked: Some(InputBlock::SecureScreen),
+                active: Some(false),
+            },
+            ClientMsg::Pong {
+                instance: 1,
+                echo_micros: 2,
+                blocked: None,
+                active: Some(true),
             },
             ClientMsg::Ack { seq: 99 },
             ClientMsg::EdgeLeave {
@@ -478,7 +513,22 @@ mod tests {
             ServerMsg::decode(&old),
             Some(ServerMsg::Heartbeat {
                 sent_micros: 9,
-                wants_sound: false
+                wants_sound: false,
+                controlling: None,
+            })
+        );
+        // A 0.4.17 client's pong (no "active" byte): unknown, not "no".
+        let mut old = vec![0x21];
+        old.extend_from_slice(&1u64.to_le_bytes());
+        old.extend_from_slice(&2u64.to_le_bytes());
+        old.push(0);
+        assert_eq!(
+            ClientMsg::decode(&old),
+            Some(ClientMsg::Pong {
+                instance: 1,
+                echo_micros: 2,
+                blocked: None,
+                active: None,
             })
         );
     }

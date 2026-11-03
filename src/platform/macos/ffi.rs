@@ -12,6 +12,7 @@ pub type CFMachPortRef = *mut c_void;
 pub type CFRunLoopRef = *mut c_void;
 pub type CFRunLoopSourceRef = *mut c_void;
 pub type CFStringRef = *const c_void;
+pub type CFDictionaryRef = *const c_void;
 pub type CGDirectDisplayID = u32;
 pub type CGError = i32;
 
@@ -94,6 +95,8 @@ pub const kCGEventSourceStateCombinedSessionState: i32 = 0;
 pub const kCGEventSourceStateHIDSystemState: i32 = 1;
 pub const kCGScrollEventUnitPixel: u32 = 0;
 
+pub const kCFStringEncodingUTF8: u32 = 0x0800_0100;
+
 pub const kCGMouseButtonLeft: u32 = 0;
 pub const kCGMouseButtonRight: u32 = 1;
 
@@ -138,12 +141,17 @@ extern "C" {
     /// Accessibility permission (needed to post and to block input).
     pub fn CGPreflightPostEventAccess() -> bool;
     pub fn CGRequestPostEventAccess() -> bool;
+    /// This login session's state (screen locked, on the console, ...).
+    pub fn CGSessionCopyCurrentDictionary() -> CFDictionaryRef;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
     pub static kCFRunLoopCommonModes: CFStringRef;
     pub fn CFRelease(cf: CFTypeRef);
+    pub fn CFStringCreateWithCString(alloc: CFTypeRef, s: *const std::ffi::c_char, encoding: u32) -> CFStringRef;
+    pub fn CFDictionaryGetValue(dict: CFDictionaryRef, key: CFTypeRef) -> CFTypeRef;
+    pub fn CFBooleanGetValue(b: CFTypeRef) -> bool;
     pub fn CFMachPortCreateRunLoopSource(alloc: CFTypeRef, port: CFMachPortRef, order: isize) -> CFRunLoopSourceRef;
     pub fn CFMachPortInvalidate(port: CFMachPortRef);
     pub fn CFRunLoopGetCurrent() -> CFRunLoopRef;
@@ -164,6 +172,24 @@ impl Cf {
 impl Drop for Cf {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0) }
+    }
+}
+
+/// Is the screen locked, or another user's session in front (fast user
+/// switching)? Posted input goes nowhere then.
+pub fn session_unavailable() -> bool {
+    unsafe {
+        let Some(session) = Cf::new(CGSessionCopyCurrentDictionary() as *mut c_void) else {
+            return false; // no window server session: nothing to tell
+        };
+        let flag = |name: &std::ffi::CStr| {
+            let key = Cf::new(
+                CFStringCreateWithCString(std::ptr::null(), name.as_ptr(), kCFStringEncodingUTF8) as *mut c_void,
+            )?;
+            let value = CFDictionaryGetValue(session.0, key.0);
+            (!value.is_null()).then(|| CFBooleanGetValue(value))
+        };
+        flag(c"CGSSessionScreenIsLocked") == Some(true) || flag(c"kCGSSessionOnConsoleKey") == Some(false)
     }
 }
 

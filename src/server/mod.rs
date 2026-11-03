@@ -618,8 +618,18 @@ impl Server {
         st.peers[i].addr = Some(src);
         match msg {
             ClientMsg::Pong {
-                echo_micros, blocked, ..
+                echo_micros,
+                blocked,
+                active,
+                ..
             } => {
+                let controlling = st.switcher.active() == Some(i);
+                if st.peers[i].let_go(controlling, active) {
+                    log!("{} let go of the mouse; taking input back", st.peers[i].entry.name);
+                    if let Some(switch) = st.switcher.force_leave() {
+                        self.apply_switch(&mut st, switch);
+                    }
+                }
                 let p = &mut st.peers[i];
                 if blocked != p.blocked {
                     match blocked {
@@ -659,9 +669,11 @@ impl Server {
         }
         let wants_sound = self.wants_sound();
         let mut st = self.lock();
-        let Some(p) = st.peers.iter_mut().find(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
+        let Some(i) = st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
             return;
         };
+        let controlling = st.switcher.active() == Some(i);
+        let p = &mut st.peers[i];
         p.addr = Some(src);
         p.last_heartbeat = Some(Instant::now());
         self.send(
@@ -669,6 +681,7 @@ impl Server {
             &ServerMsg::Heartbeat {
                 sent_micros: crate::now_micros(),
                 wants_sound,
+                controlling: Some(controlling),
             },
         );
     }
@@ -697,7 +710,8 @@ impl Server {
         let wants_sound = self.wants_sound();
         {
             let mut st = self.lock();
-            for p in st.peers.iter_mut() {
+            let active = st.switcher.active();
+            for (i, p) in st.peers.iter_mut().enumerate() {
                 let Some(addr) = p.addr else { continue };
                 if p.prioritized != Some(addr) {
                     p.prioritized = Some(addr);
@@ -713,6 +727,7 @@ impl Server {
                         &ServerMsg::Heartbeat {
                             sent_micros: crate::now_micros(),
                             wants_sound,
+                            controlling: Some(active == Some(i)),
                         },
                     );
                 }

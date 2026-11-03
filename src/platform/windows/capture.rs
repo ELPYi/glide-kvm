@@ -14,12 +14,18 @@
 //!
 //! Hooks run on the thread that installed them, and only while that thread
 //! pumps messages, so capture owns a dedicated high-priority thread.
+//!
+//! Windows silently removes a low-level hook whose callback once takes too
+//! long to return (`LowLevelHooksTimeout`) and never says so. Keys would
+//! then stop reaching the other PC, or its clicks land here, until glide
+//! restarted. So both hooks are renewed every second (see [`renew_hook`]).
 
 use std::cell::{Cell, RefCell};
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -39,11 +45,14 @@ use crate::platform::geometry::ScreenLayout;
 use crate::platform::{CaptureHandle, Captured, Handler};
 
 const MOUSE_MOVE_ABSOLUTE: u16 = 0x01;
-/// Timer that re-checks our Raw Input registration (see [`ensure_raw_input`]).
+/// Timer that re-checks our Raw Input registration (see [`ensure_raw_input`])
+/// and renews the hooks.
 const RAW_INPUT_CHECK_TIMER: usize = 1;
 const RAW_INPUT_CHECK_MS: u32 = 1000;
 /// Fake shift scan codes some keyboards emit around navigation keys.
 const FAKE_SHIFTS: [u32; 2] = [0x2A, 0x36];
+/// A hook callback this slow risks Windows quietly removing the hook.
+const SLOW_HOOK: Duration = Duration::from_millis(100);
 
 struct Ctx {
     grab: Arc<AtomicBool>,
@@ -55,8 +64,35 @@ thread_local! {
     /// Monitor layout, refreshed when displays change. Keeps the per-event
     /// edge check to a few comparisons (a gaming mouse sends 1000s/second).
     static LAYOUT: RefCell<ScreenLayout> = RefCell::new(ScreenLayout::default());
+    /// The keyboard hook (installed the whole time).
+    static KEYBOARD_HOOK: Cell<HHOOK> = const { Cell::new(null_mut()) };
     /// The mouse hook, while installed (only while grabbed).
     static MOUSE_HOOK: Cell<HHOOK> = const { Cell::new(null_mut()) };
+}
+
+/// Put a fresh low-level hook in `slot`'s place (or in an empty one).
+/// Nothing is seen twice or missed: hook callbacks only run on this thread
+/// while it waits for messages, never between these two calls.
+unsafe fn renew_hook(slot: &Cell<HHOOK>, id: WINDOWS_HOOK_ID, proc: HOOKPROC) -> bool {
+    let new = SetWindowsHookExW(id, proc, GetModuleHandleW(null()), 0);
+    if new.is_null() {
+        return false; // keep whatever we had
+    }
+    let old = slot.replace(new);
+    if !old.is_null() {
+        UnhookWindowsHookEx(old);
+    }
+    true
+}
+
+/// Renew both hooks, in case Windows removed one (see the module docs).
+fn renew_hooks() {
+    unsafe {
+        KEYBOARD_HOOK.with(|h| renew_hook(h, WH_KEYBOARD_LL, Some(keyboard_proc)));
+        if mouse_hook_installed() {
+            MOUSE_HOOK.with(|h| renew_hook(h, WH_MOUSE_LL, Some(mouse_proc)));
+        }
+    }
 }
 
 /// Install the mouse hook while grabbed, remove it otherwise. Runs on the
@@ -68,13 +104,7 @@ fn sync_mouse_hook() {
     let want = grabbed();
     MOUSE_HOOK.with(|h| unsafe {
         if want && h.get().is_null() {
-            h.set(SetWindowsHookExW(
-                WH_MOUSE_LL,
-                Some(mouse_proc),
-                GetModuleHandleW(null()),
-                0,
-            ));
-            if h.get().is_null() {
+            if !renew_hook(h, WH_MOUSE_LL, Some(mouse_proc)) {
                 crate::log!("couldn't install the mouse hook; this PC's mouse isn't blocked");
             }
         } else if !want && !h.get().is_null() {
@@ -103,6 +133,21 @@ fn dispatch(ev: Captured) -> bool {
     })
 }
 
+/// [`dispatch`] from inside a hook, noting when it was slow enough that
+/// Windows may have removed the hook (it's renewed within a second).
+fn dispatch_in_hook(ev: Captured) -> bool {
+    let started = Instant::now();
+    let block = dispatch(ev);
+    let took = started.elapsed();
+    if took >= SLOW_HOOK {
+        crate::log!(
+            "the input hook took {} ms; Windows may have switched it off (glide turns it back on)",
+            took.as_millis()
+        );
+    }
+    block
+}
+
 /// Selftest only: keep the user's real input out of the measurement.
 fn selftest_blocks_real_input() -> bool {
     SELFTEST.load(Ordering::Relaxed) && grabbed()
@@ -125,7 +170,7 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
             let extended = k.flags & LLKHF_EXTENDED != 0;
             let fake_shift = extended && FAKE_SHIFTS.contains(&k.scanCode);
             let block = match keymap::from_windows(k.vkCode, k.scanCode, extended) {
-                Some(code) if !fake_shift => dispatch(Captured::Input(InputEvent::Key { code, down })),
+                Some(code) if !fake_shift => dispatch_in_hook(Captured::Input(InputEvent::Key { code, down })),
                 _ => grabbed(),
             };
             sync_mouse_hook(); // a shortcut may have switched
@@ -182,7 +227,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             }
         } else {
             let block = match mouse_event(wparam as u32, m.mouseData) {
-                Some(ev) => dispatch(Captured::Input(ev)),
+                Some(ev) => dispatch_in_hook(Captured::Input(ev)),
                 None => grabbed(),
             };
             if block {
@@ -202,6 +247,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         if ensure_raw_input(hwnd) {
             crate::log!("re-claimed mouse Raw Input from another part of the app");
         }
+        renew_hooks();
         return 0;
     }
     if msg == WM_INPUT {
@@ -298,7 +344,6 @@ unsafe fn ensure_raw_input(hwnd: HWND) -> bool {
 /// (plus the mouse hook, while grabbed).
 struct Installed {
     hwnd: HWND,
-    keyboard: HHOOK,
 }
 
 unsafe fn install() -> Result<Installed> {
@@ -334,10 +379,10 @@ unsafe fn install() -> Result<Installed> {
         return Err(anyhow!("RegisterRawInputDevices failed"));
     }
     SetTimer(hwnd, RAW_INPUT_CHECK_TIMER, RAW_INPUT_CHECK_MS, None);
-    let keyboard = SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), hinst, 0);
-    let installed = Installed { hwnd, keyboard };
+    let keyboard = KEYBOARD_HOOK.with(|h| renew_hook(h, WH_KEYBOARD_LL, Some(keyboard_proc)));
+    let installed = Installed { hwnd };
     sync_mouse_hook();
-    if keyboard.is_null() {
+    if !keyboard {
         uninstall(&installed);
         return Err(anyhow!("SetWindowsHookExW failed"));
     }
@@ -345,14 +390,13 @@ unsafe fn install() -> Result<Installed> {
 }
 
 unsafe fn uninstall(i: &Installed) {
-    if !i.keyboard.is_null() {
-        UnhookWindowsHookEx(i.keyboard);
+    for hook in [&KEYBOARD_HOOK, &MOUSE_HOOK] {
+        hook.with(|h| {
+            if !h.get().is_null() {
+                UnhookWindowsHookEx(h.replace(null_mut()));
+            }
+        });
     }
-    MOUSE_HOOK.with(|h| {
-        if !h.get().is_null() {
-            UnhookWindowsHookEx(h.replace(null_mut()));
-        }
-    });
     KillTimer(i.hwnd, RAW_INPUT_CHECK_TIMER);
     let rid = RAWINPUTDEVICE {
         usUsagePage: MOUSE_USAGE_PAGE,

@@ -15,7 +15,7 @@ use objc2::{class, msg_send};
 
 use super::ffi::*;
 use super::keymap;
-use crate::input::{Button, InputEvent, PointerFeel, Side};
+use crate::input::{Button, InputBlock, InputEvent, PointerFeel, Side};
 use crate::platform::geometry::{Rect, ScreenLayout};
 use crate::platform::{Desktop, EdgeHit};
 
@@ -361,6 +361,10 @@ impl Desktop for MacDesktop {
 
     fn cursor_position(&self) -> Option<(i32, i32)> {
         cursor_location().map(|p| (p.x.floor() as i32, p.y.floor() as i32))
+    }
+
+    fn input_block(&self) -> Option<InputBlock> {
+        session_unavailable().then_some(InputBlock::SecureScreen)
     }
 }
 
