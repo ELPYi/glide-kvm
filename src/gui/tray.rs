@@ -32,7 +32,7 @@ pub fn install(ctx: egui::Context, window: isize, engine: EngineSlot) -> Result<
     menu.append(&PredefinedMenuItem::separator())?;
     menu.append(&quit)?;
 
-    let art = theme::app_icon();
+    let art = theme::tray_icon();
     let icon = TrayIconBuilder::new()
         .with_icon(Icon::from_rgba(art.rgba, art.width, art.height)?)
         .with_tooltip("glide")

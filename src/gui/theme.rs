@@ -227,39 +227,48 @@ pub fn page_margin() -> Margin {
     Margin::symmetric(24, 16)
 }
 
-/// A 64x64 icon drawn in code: two overlapping screens, the front one lit.
+/// The app icon (window, taskbar, Dock): a cursor gliding between two
+/// screens. Drawn by `scripts/make_icon.py`, which also makes the .ico
+/// embedded in glide.exe.
 pub fn app_icon() -> IconData {
-    const N: usize = 64;
-    let mut rgba = vec![0u8; N * N * 4];
-    let in_round_rect = |x: f32, y: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32| {
-        let cx = x.clamp(x0 + r, x1 - r);
-        let cy = y.clamp(y0 + r, y1 - r);
-        (x - cx).powi(2) + (y - cy).powi(2) <= r * r
-    };
-    for py in 0..N {
-        for px in 0..N {
-            let (x, y) = (px as f32 + 0.5, py as f32 + 0.5);
-            let back = in_round_rect(x, y, 4.0, 8.0, 40.0, 38.0, 4.0);
-            let front_edge = in_round_rect(x, y, 20.0, 22.0, 62.0, 58.0, 5.0);
-            let front = in_round_rect(x, y, 22.0, 24.0, 60.0, 56.0, 4.0);
-            let c: Option<[u8; 3]> = if front {
-                Some([0xC8, 0xF2, 0x5C])
-            } else if front_edge {
-                Some([0x11, 0x11, 0x10])
-            } else if back {
-                Some([0x5C, 0x6B, 0x3A])
-            } else {
-                None
-            };
-            if let Some([r, g, b]) = c {
-                let i = (py * N + px) * 4;
-                rgba[i..i + 4].copy_from_slice(&[r, g, b, 255]);
-            }
-        }
+    decode_icon(include_bytes!("../../assets/icon/glide-256.png"))
+}
+
+/// The same icon at tray size, so the OS doesn't have to shrink a big one.
+pub fn tray_icon() -> IconData {
+    if cfg!(windows) {
+        decode_icon(include_bytes!("../../assets/icon/glide-32.png"))
+    } else {
+        decode_icon(include_bytes!("../../assets/icon/glide-64.png"))
     }
-    IconData {
-        rgba,
-        width: N as u32,
-        height: N as u32,
+}
+
+fn decode_icon(png_bytes: &[u8]) -> IconData {
+    let decoded = (|| {
+        let mut dec = png::Decoder::new(std::io::Cursor::new(png_bytes));
+        dec.set_transformations(png::Transformations::normalize_to_color8());
+        let mut reader = dec.read_info().ok()?;
+        let mut rgba = vec![0; reader.output_buffer_size()?];
+        let info = reader.next_frame(&mut rgba).ok()?;
+        rgba.truncate(info.buffer_size());
+        (info.color_type == png::ColorType::Rgba).then_some(IconData {
+            rgba,
+            width: info.width,
+            height: info.height,
+        })
+    })();
+    decoded.unwrap_or_default()
+}
+
+#[cfg(test)]
+mod icon_tests {
+    use super::*;
+
+    #[test]
+    fn bundled_icons_decode() {
+        for (icon, size) in [(app_icon(), 256), (tray_icon(), if cfg!(windows) { 32 } else { 64 })] {
+            assert_eq!((icon.width, icon.height), (size, size));
+            assert_eq!(icon.rgba.len(), (size * size * 4) as usize);
+        }
     }
 }
