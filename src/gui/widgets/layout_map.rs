@@ -1,7 +1,8 @@
-//! A 3×3 grid showing where each machine sits around this one (the middle
-//! cell). Devices can be dragged to another side; dropping onto an occupied
-//! side swaps the two. Corner cells complete the grid but can't hold a
-//! device, since the cursor only crosses straight edges.
+//! Where each machine sits around this one: this PC in the middle and each
+//! device touching the side it's on, like Windows' display arrangement.
+//! Only real screens are drawn; while a device is dragged, the sides it
+//! can go to appear as outlines. Dropping onto an occupied side swaps the
+//! two. Corners hold nothing, since the cursor only crosses straight edges.
 
 use eframe::egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Painter, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
@@ -18,10 +19,11 @@ pub struct MapDevice<'a> {
 
 /// Every cell in the grid is this size.
 const SCREEN: Vec2 = Vec2::new(120.0, 62.0);
-const GAP: f32 = 8.0;
+/// Screens almost touch, as they do on a desk.
+const GAP: f32 = 4.0;
 const MAP_HEIGHT: f32 = SCREEN.y * 3.0 + GAP * 2.0 + 8.0;
 /// Drop targets reach this far into the gaps, so drops feel forgiving.
-const DROP_MARGIN: f32 = GAP;
+const DROP_MARGIN: f32 = 12.0;
 
 /// Draws "this machine" in the middle with each device on its side.
 /// With `draggable`, returns `(device index, new side)` when a drag ends on
@@ -68,19 +70,8 @@ pub fn layout_map(
     let painter = ui.painter_at(rect);
     let hover_target = dragging.and_then(|(_, p)| side_under(center, p));
 
-    // Corners: very faint, just completing the grid.
-    let faint = ui.visuals().weak_text_color().gamma_multiply(0.12);
-    for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
-        let r = cell(center, dx, dy);
-        painter.rect_stroke(
-            r,
-            CornerRadius::same(theme::RADIUS),
-            Stroke::new(1.0, faint),
-            StrokeKind::Inside,
-        );
-    }
-    // Empty sides: faint outlines, highlighted while dragging over them.
-    for side in Side::ALL {
+    // While dragging: where it can go, highlighted under the pointer.
+    for side in Side::ALL.into_iter().filter(|_| dragging.is_some()) {
         let occupied = devices.iter().any(|d| d.side == side);
         let highlighted = hover_target == Some(side);
         if !occupied || highlighted {
