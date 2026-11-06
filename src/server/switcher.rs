@@ -181,10 +181,16 @@ impl Switcher {
         match ev {
             Captured::Edge(hit) => self.on_edge(hit, now, target),
             Captured::Modifiers(actual) => {
-                // Forget modifiers we think are held but the OS says aren't.
+                // Forget modifiers we think are held here but the OS says
+                // aren't (a release it never showed us). Not ones going to
+                // another PC: they're blocked here, so the OS never sees them
+                // held, and forgetting one would lose its release over there
+                // (Shift stuck down on that PC).
                 for code in actual.released_codes() {
-                    self.phys_down.remove(&code);
-                    self.key_dest.remove(&code);
+                    if !matches!(self.key_dest.get(&code), Some(Some(_))) {
+                        self.phys_down.remove(&code);
+                        self.key_dest.remove(&code);
+                    }
                 }
                 Decision::default()
             }
@@ -892,6 +898,33 @@ mod tests {
             "release follows the press"
         );
         assert_eq!(typed(&mut s, A), None, "a new press goes here");
+    }
+
+    #[test]
+    fn modifier_sync_never_strands_a_key_on_the_other_pc() {
+        // Typing goes to the client while the cursor is here. Shift is held
+        // (blocked here, so the OS says it isn't), then a letter is typed.
+        let mut s = follows_click();
+        let now = Instant::now();
+        enter(&mut s, now);
+        click(&mut s);
+        s.force_leave();
+        assert!(s.handle(key(SHIFT, true), now, right_only).forward.is_some());
+        s.handle(Captured::Modifiers(Mods::default()), now, right_only);
+        assert_eq!(typed(&mut s, A), Some(0));
+        // Shift+click here: Shift must be lifted over there.
+        let d = s.handle(button(true), now, right_only);
+        assert!(
+            d.before.contains(&(
+                Some(0),
+                InputEvent::Key {
+                    code: SHIFT,
+                    down: false
+                }
+            )),
+            "Shift released on the client: {:?}",
+            d.before
+        );
     }
 
     #[test]

@@ -163,8 +163,9 @@ unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARA
         } else {
             let down = matches!(wparam as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
             if down && !grabbed() {
-                // Nothing is being blocked right now, so the OS's view of
-                // which modifiers are held is accurate: share it.
+                // The OS's view of which modifiers are held, for keys going
+                // to this PC (the switcher ignores it for keys it's sending
+                // elsewhere, which are blocked here).
                 dispatch(Captured::Modifiers(os_modifiers()));
             }
             let extended = k.flags & LLKHF_EXTENDED != 0;
