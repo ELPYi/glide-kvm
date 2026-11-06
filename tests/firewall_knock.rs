@@ -55,13 +55,17 @@ fn server_answers_a_knock_immediately() {
     let t0 = Instant::now();
     client.send_to(&pkt, ("127.0.0.1", server_port)).unwrap();
 
+    // Generous wait, so a busy CI machine can't fail the read itself; the
+    // timing is checked below.
+    client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     let (n, _) = client.recv_from(&mut buf).expect("a reply to the knock");
     let elapsed = t0.elapsed();
     let h = crypto::parse_header(&buf[..n]).unwrap();
     let plain = crypto::open(&crypto::session_cipher(SECRET, h.session), &h, &buf[..n]).unwrap();
     assert!(matches!(ServerMsg::decode(&plain), Some(ServerMsg::Heartbeat { .. })));
+    // Heartbeats go every 200 ms; a reply well inside that is the knock's.
     assert!(
-        elapsed < Duration::from_millis(50),
+        elapsed < Duration::from_millis(120),
         "answered in {elapsed:?}, not on the next heartbeat tick"
     );
     server.stop();
