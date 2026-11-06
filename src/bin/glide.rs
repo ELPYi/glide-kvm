@@ -25,6 +25,12 @@ fn main() -> eframe::Result {
     if has("--remove-admin-task") {
         std::process::exit(exit_code(system::remove_admin_task()));
     }
+    if has("--install-signin") {
+        std::process::exit(exit_code(system::install_signin()));
+    }
+    if has("--remove-signin") {
+        std::process::exit(exit_code(system::remove_signin()));
+    }
 
     // Already running (maybe hidden in the tray)? Bring it forward instead.
     // A copy started by the admin task waits a moment: the copy that

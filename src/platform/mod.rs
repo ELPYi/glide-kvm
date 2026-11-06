@@ -21,6 +21,7 @@
 //!     fn set_autostart(enabled: bool) -> Result<()>
 //!     fn open_firewall(port: u16) -> Result<()>
 //!     fn is_elevated() / install_admin_task() / run_admin_task() / ...  // admin mode
+//!     fn signin_installed() / install_signin() / remove_signin() / refresh_signin()
 //! }
 //! ```
 //!
@@ -124,6 +125,8 @@ mod unsupported;
 
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+pub use self::windows::signin;
 #[cfg(windows)]
 pub use self::windows::{
     boost_latency_thread, desktop, http_get, local_time, open_clipboard, open_loopback, open_speaker, precise_sleep,

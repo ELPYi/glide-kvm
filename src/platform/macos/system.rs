@@ -172,3 +172,18 @@ pub fn remove_admin_task() -> Result<()> {
 pub fn run_elevated(_args: &str) -> Result<()> {
     bail!(NO_ADMIN)
 }
+
+/// Controlling the sign-in screen is Windows-only.
+pub fn signin_installed() -> bool {
+    false
+}
+
+pub fn install_signin() -> Result<()> {
+    bail!(NO_ADMIN)
+}
+
+pub fn remove_signin() -> Result<()> {
+    bail!(NO_ADMIN)
+}
+
+pub fn refresh_signin() {}

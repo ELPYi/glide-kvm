@@ -18,6 +18,7 @@
 //! - [`audio`]: recording what this PC plays, and playing sound (WASAPI)
 //! - [`clipboard`]: noticing copies, and putting other PCs' clipboards here
 //! - [`selftest`]: checks the assumptions capture relies on
+//! - [`signin`]: controlling the sign-in screen (a SYSTEM service + helper)
 
 mod admin;
 mod audio;
@@ -35,6 +36,7 @@ mod pointer;
 mod qos;
 mod sched;
 mod selftest;
+pub mod signin;
 pub mod system;
 mod timing;
 

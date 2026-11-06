@@ -4,7 +4,8 @@
   usual causes, won't cross into a PC in these states, and takes control
   back within a fraction of a second if one happens while you're on it:
   - the other PC's lock screen, UAC prompt or Ctrl+Alt+Del screen is
-    showing (Windows lets no program control those), or a Mac's lock screen;
+    showing (Windows keeps those out of reach unless **Control this PC's
+    sign-in screen** is on there, see below), or a Mac's lock screen;
   - an admin window (Task Manager, an installer) is in front there and glide
     isn't running as administrator on it;
   - the two PCs disagree about which one has the mouse (one stopped hearing
@@ -30,8 +31,16 @@
   Startup → Run glide as administrator** on that PC (and on the sharing PC,
   so its shortcuts keep working while an admin window is focused). It asks
   for permission once, then launches with admin rights without asking again.
-  The UAC prompt itself, the lock screen and Ctrl+Alt+Del can't be
-  controlled remotely; Windows keeps those on a protected desktop.
+  The UAC prompt itself and the lock screen need the next setting.
+- **Can't type the PIN on the other PC's lock screen, or click its UAC
+  prompts**: on that PC, turn on **Settings → Startup → Control this PC's
+  sign-in screen from another PC** (it needs *Run glide as administrator*
+  on). It adds a small Windows service, "glide sign-in screen", which
+  turning the setting off removes. Ctrl+Alt+Del still can't be sent (it
+  isn't needed for the Windows 11 lock screen: click or press any key). If
+  it doesn't work, that PC's Logs tab says why ("sign-in screen: ..."), and
+  `glide-cli signin-check`, run as administrator there, tests the link.
+  Signing in after a restart, before glide has started, isn't covered yet.
 - **Ctrl+Alt+Del** always goes to the PC you're physically at; Windows reserves it.
 - **Mac: sharing won't start, or the cursor doesn't move there**: glide needs
   the Accessibility permission. In System Settings, Privacy & Security,

@@ -208,6 +208,17 @@ fn write_input(w: &mut W, ev: &InputEvent) {
     }
 }
 
+/// One input event on its own (the sign-in screen helper's pipe uses it).
+pub fn encode_input(ev: &InputEvent) -> Vec<u8> {
+    let mut w = W(Vec::with_capacity(10));
+    write_input(&mut w, ev);
+    w.0
+}
+
+pub fn decode_input(buf: &[u8]) -> Option<InputEvent> {
+    read_input(&mut R(buf))
+}
+
 fn read_input(r: &mut R) -> Option<InputEvent> {
     Some(match r.u8()? {
         1 => InputEvent::Key {

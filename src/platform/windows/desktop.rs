@@ -2,9 +2,13 @@
 //!
 //! Keys are injected by scan code (games read scan codes), the mouse with
 //! relative moves so the receiving machine's own pointer acceleration applies.
+//!
+//! While the sign-in screen is up, input goes through glide's SYSTEM helper
+//! instead, if it's installed (see `signin`): nothing else can reach it.
 
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -15,6 +19,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetCursorPos, SetCursorPos, XBUTTON1, XBUTTON2};
 
 use super::keymap::{self, WinKey};
+use super::signin::link::Link;
+use super::signin::{Reply, Request};
 use crate::input::{Button, InputBlock, InputEvent, PointerFeel, Side};
 use crate::platform::geometry::{Rect, ScreenLayout};
 use crate::platform::{Desktop, EdgeHit};
@@ -26,6 +32,10 @@ pub(super) struct WinDesktop {
     layout: Mutex<(Instant, ScreenLayout)>,
     /// Running as administrator (admin windows don't block us then).
     elevated: bool,
+    /// To the sign-in screen helper.
+    signin: Mutex<Link>,
+    /// The sign-in screen is up and the helper is taking our input.
+    via_helper: AtomicBool,
 }
 
 impl WinDesktop {
@@ -33,7 +43,21 @@ impl WinDesktop {
         WinDesktop {
             layout: Mutex::new((Instant::now(), screen_layout())),
             elevated: super::admin::is_elevated(),
+            signin: Mutex::new(Link::default()),
+            via_helper: AtomicBool::new(false),
         }
+    }
+
+    /// Ask the sign-in screen helper (only while it's the way in).
+    fn helper(&self, request: Request) -> Option<Reply> {
+        if !self.via_helper.load(Ordering::Relaxed) {
+            return None;
+        }
+        let reply = self.signin.lock().unwrap_or_else(|e| e.into_inner()).request(request);
+        if reply.is_none() {
+            self.via_helper.store(false, Ordering::Relaxed);
+        }
+        reply
     }
 
     fn layout(&self) -> ScreenLayout {
@@ -137,46 +161,58 @@ fn button_flags(button: Button, down: bool) -> (u32, i32) {
     }
 }
 
+/// Send one event to whatever this thread's desktop shows.
+pub(super) fn inject_event(ev: &InputEvent) {
+    match *ev {
+        InputEvent::Motion { dx, dy } => send(mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE)),
+        InputEvent::Button { button, down } => {
+            let (flags, data) = button_flags(button, down);
+            send(mouse_input(0, 0, data, flags));
+        }
+        InputEvent::Wheel { dx, dy } => {
+            if dy != 0 {
+                send(mouse_input(0, 0, dy, MOUSEEVENTF_WHEEL));
+            }
+            if dx != 0 {
+                send(mouse_input(0, 0, dx, MOUSEEVENTF_HWHEEL));
+            }
+        }
+        InputEvent::Key { code, down } => {
+            let up = if down { 0 } else { KEYEVENTF_KEYUP };
+            let ext = |e: bool| if e { KEYEVENTF_EXTENDEDKEY } else { 0 };
+            match keymap::to_windows(code) {
+                Some(WinKey::Scan { scan, extended }) => {
+                    send(key_input(0, scan, KEYEVENTF_SCANCODE | ext(extended) | up))
+                }
+                Some(WinKey::Vk { vk, extended }) => send(key_input(vk, 0, ext(extended) | up)),
+                None => {}
+            }
+        }
+    }
+}
+
 impl Desktop for WinDesktop {
     fn inject(&self, ev: &InputEvent) {
-        match *ev {
-            InputEvent::Motion { dx, dy } => send(mouse_input(dx, dy, 0, MOUSEEVENTF_MOVE)),
-            InputEvent::Button { button, down } => {
-                let (flags, data) = button_flags(button, down);
-                send(mouse_input(0, 0, data, flags));
-            }
-            InputEvent::Wheel { dx, dy } => {
-                if dy != 0 {
-                    send(mouse_input(0, 0, dy, MOUSEEVENTF_WHEEL));
-                }
-                if dx != 0 {
-                    send(mouse_input(0, 0, dx, MOUSEEVENTF_HWHEEL));
-                }
-            }
-            InputEvent::Key { code, down } => {
-                let up = if down { 0 } else { KEYEVENTF_KEYUP };
-                let ext = |e: bool| if e { KEYEVENTF_EXTENDEDKEY } else { 0 };
-                match keymap::to_windows(code) {
-                    Some(WinKey::Scan { scan, extended }) => {
-                        send(key_input(0, scan, KEYEVENTF_SCANCODE | ext(extended) | up))
-                    }
-                    Some(WinKey::Vk { vk, extended }) => send(key_input(vk, 0, ext(extended) | up)),
-                    None => {}
-                }
-            }
+        if self.helper(Request::Inject(*ev)).is_none() {
+            inject_event(ev);
         }
     }
 
     fn warp_to_edge(&self, side: Side, frac: f32) {
         let (x, y) = self.layout().entry_point(side, frac);
-        unsafe {
-            SetCursorPos(x, y);
+        if self.helper(Request::Warp { x, y }).is_none() {
+            unsafe {
+                SetCursorPos(x, y);
+            }
         }
     }
 
     fn edge_hit(&self, dx: i32, dy: i32) -> Option<EdgeHit> {
-        let p = cursor_pos()?;
-        self.layout().edge_hit(p.x, p.y, dx, dy)
+        let (x, y) = match self.helper(Request::Status) {
+            Some(reply) => reply.cursor?,
+            None => cursor_pos().map(|p| (p.x, p.y))?,
+        };
+        self.layout().edge_hit(x, y, dx, dy)
     }
 
     fn notify(&self, text: &str) {
@@ -196,7 +232,19 @@ impl Desktop for WinDesktop {
     }
 
     fn input_block(&self) -> Option<InputBlock> {
-        super::blocking::input_block(self.elevated)
+        let block = super::blocking::input_block(self.elevated);
+        // The sign-in screen: fine if the helper can reach it for us (only
+        // possible as administrator).
+        let helped = block == Some(InputBlock::SecureScreen) && self.elevated && {
+            self.via_helper.store(true, Ordering::Relaxed);
+            self.helper(Request::Status).is_some()
+        };
+        self.via_helper.store(helped, Ordering::Relaxed);
+        if helped {
+            None
+        } else {
+            block
+        }
     }
 
     fn pointer_feel(&self) -> Option<PointerFeel> {

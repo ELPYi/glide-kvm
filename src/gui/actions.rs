@@ -71,6 +71,9 @@ pub enum Action {
     SetHotkey(HotkeyAction, Hotkey),
     /// Turn administrator mode on/off (controls Task Manager etc.).
     SetRunAsAdmin(bool),
+    /// Install/remove the service that lets glide control this PC's sign-in
+    /// screen (Windows).
+    SetSignInScreen(bool),
     /// Turn automatic updates on/off (applies right away).
     SetAutoUpdate(bool),
     /// Sound settings, applied right away. `save`: also write them to disk

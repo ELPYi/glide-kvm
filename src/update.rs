@@ -1,8 +1,11 @@
 //! Over-the-air updates from GitHub Releases.
 //!
-//! CI publishes each release with `glide.exe`, `glide-cli.exe`, the Mac's
-//! `glide-macos` and a small `latest.toml` manifest (version + SHA-256 of
-//! each file). On a Mac only the program inside `glide.app` is replaced; the
+//! CI publishes each release with `glide.exe`, `glide-cli.exe`,
+//! `glide-secure.exe` (sign-in screen support), the Mac's `glide-macos` and
+//! a small `latest.toml` manifest (version + SHA-256 of each file). The
+//! manifest is signed (`latest.toml.sig`, Ed25519) with a key only CI has;
+//! glide refuses one that isn't, so a release can't be swapped for something
+//! else even by someone who gets into the GitHub account but not its secrets. On a Mac only the program inside `glide.app` is replaced; the
 //! app around it never changes, so its signature (and the permissions macOS
 //! gave it) stay valid. A release build
 //! checks the manifest shortly after starting and every 30 minutes. When a newer
@@ -27,6 +30,14 @@ use sha2::{Digest, Sha256};
 use crate::log;
 
 pub const MANIFEST: &str = "latest.toml";
+/// The manifest's signature: hex of an Ed25519 signature over its exact bytes.
+const SIGNATURE_SUFFIX: &str = ".sig";
+/// The public half of the release signing key (the private half is the
+/// `GLIDE_SIGNING_KEY` secret in CI).
+const RELEASE_KEY: &str = "f4e326595d9174d9c6a664b319d64f30c1d5286c8e788f3e64e940ad24c533e7";
+/// Sign-in screen support (Windows): runs as a service, see
+/// `platform::windows::signin`.
+pub const SECURE_EXE: &str = "glide-secure.exe";
 #[cfg(windows)]
 pub const APP_EXE: &str = "glide.exe";
 #[cfg(windows)]
@@ -65,6 +76,9 @@ pub struct Manifest {
     pub macos_glide_sha256: String,
     #[serde(default)]
     pub macos_cli_sha256: String,
+    /// `glide-secure.exe`; empty in releases from before it existed.
+    #[serde(default)]
+    pub secure_sha256: String,
 }
 
 impl Manifest {
@@ -93,6 +107,65 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
         (Some(a), Some(b)) => a > b,
         _ => false,
     }
+}
+
+fn from_hex(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+/// Check `text` was signed with the private half of `key` (hex), and read it.
+pub fn verify_manifest(text: &[u8], signature_hex: &str, key: &str) -> Result<Manifest> {
+    use ed25519_dalek::{Signature, VerifyingKey};
+    let key: [u8; 32] = from_hex(key)
+        .and_then(|k| k.try_into().ok())
+        .context("bad release key")?;
+    let signature: [u8; 64] = from_hex(signature_hex)
+        .and_then(|s| s.try_into().ok())
+        .context("the release's signature is malformed")?;
+    VerifyingKey::from_bytes(&key)
+        .context("bad release key")?
+        .verify_strict(text, &Signature::from_bytes(&signature))
+        .map_err(|_| anyhow::anyhow!("the release isn't signed by glide's key; not installing it"))?;
+    toml::from_str(std::str::from_utf8(text)?).context("reading the release manifest")
+}
+
+/// Download a manifest and its signature, and check it.
+fn fetch_manifest(url: &str) -> Result<Manifest> {
+    let text = crate::platform::http_get(url)?;
+    let signature = crate::platform::http_get(&format!("{url}{SIGNATURE_SUFFIX}"))?;
+    verify_manifest(&text, &String::from_utf8_lossy(&signature), RELEASE_KEY)
+}
+
+/// One file of this exact version's release, checked against its signed
+/// manifest (to get or refresh `glide-secure.exe` without a full update).
+pub fn verified_release_file(asset: &str) -> Result<Vec<u8>> {
+    if !crate::is_release_build() {
+        bail!("local builds don't download release files");
+    }
+    let repo = crate::UPDATE_REPO;
+    let manifest = fetch_manifest(&asset_url(repo, crate::VERSION, MANIFEST))?;
+    if manifest.version != crate::VERSION {
+        bail!("release {} has the wrong manifest", crate::VERSION);
+    }
+    let expected = match asset {
+        SECURE_EXE => &manifest.secure_sha256,
+        _ => bail!("no checksum for {asset}"),
+    };
+    if expected.is_empty() {
+        bail!("release {} has no {asset}", crate::VERSION);
+    }
+    let bytes = crate::platform::http_get(&asset_url(repo, crate::VERSION, asset))?;
+    if !sha256_hex(&bytes).eq_ignore_ascii_case(expected.trim()) {
+        bail!("download of {asset} is corrupt (checksum mismatch)");
+    }
+    Ok(bytes)
 }
 
 pub fn sha256_hex(bytes: &[u8]) -> String {
@@ -145,7 +218,7 @@ pub fn install(target: &Path) -> Result<()> {
 
 /// Remove `*.old` leftovers from an update (they may still be closing).
 pub fn clean_up_old(dir: &Path) {
-    for file in [APP_EXE, CLI_EXE] {
+    for file in [APP_EXE, CLI_EXE, SECURE_EXE] {
         let old = with_suffix(&dir.join(file), ".old");
         for _ in 0..20 {
             if !old.exists() || std::fs::remove_file(&old).is_ok() {
@@ -312,8 +385,7 @@ fn run(u: &Updater, opts: &UpdaterOptions) {
 /// Returns the version staged, or None if already up to date.
 fn check_and_download(u: &Updater, dir: &Path) -> Result<Option<String>> {
     let repo = crate::UPDATE_REPO;
-    let text = crate::platform::http_get(&manifest_url(repo))?;
-    let manifest: Manifest = toml::from_str(std::str::from_utf8(&text)?).context("reading the release manifest")?;
+    let manifest = fetch_manifest(&manifest_url(repo))?;
     let (app_sha, cli_sha) = manifest.checksums();
     if !is_newer(&manifest.version, crate::VERSION) || app_sha.is_empty() {
         return Ok(None);
@@ -326,16 +398,22 @@ fn check_and_download(u: &Updater, dir: &Path) -> Result<Option<String>> {
         let cli = crate::platform::http_get(&asset_url(repo, &manifest.version, CLI_ASSET))?;
         stage(&dir.join(CLI_EXE), &cli, cli_sha)?;
     }
+    if cfg!(windows) && !manifest.secure_sha256.is_empty() {
+        let secure = crate::platform::http_get(&asset_url(repo, &manifest.version, SECURE_EXE))?;
+        stage(&dir.join(SECURE_EXE), &secure, &manifest.secure_sha256)?;
+    }
     Ok(Some(manifest.version))
 }
 
 fn install_all(dir: &Path) -> Result<()> {
     install(&dir.join(APP_EXE))?;
-    let cli = dir.join(CLI_EXE);
-    if with_suffix(&cli, ".new").exists() {
-        // The command-line tool is optional: don't fail the update over it.
-        if let Err(e) = install(&cli) {
-            log!("couldn't update {CLI_EXE}: {e:#}");
+    for optional in [CLI_EXE, SECURE_EXE] {
+        let path = dir.join(optional);
+        if with_suffix(&path, ".new").exists() {
+            // Not the app itself: don't fail the update over it.
+            if let Err(e) = install(&path) {
+                log!("couldn't update {optional}: {e:#}");
+            }
         }
     }
     Ok(())
@@ -368,6 +446,34 @@ mod tests {
             asset_url("me/glide-kvm", "0.4.17", "glide.exe"),
             "https://github.com/me/glide-kvm/releases/download/v0.4.17/glide.exe"
         );
+    }
+
+    /// Signed by CI's tooling (`openssl pkeyutl -sign -rawin`) with a
+    /// throwaway key, so the check is proven against the real format.
+    const TEST_KEY: &str = "93845fd7c6d24ec8cd95d8b3bd394348f82866f1eaf0e06bcfca6338f12e5201";
+    const TEST_MANIFEST: &str = "version = \"0.4.99\"\nglide_sha256 = \"ab\"\ncli_sha256 = \"cd\"\n";
+    const TEST_SIGNATURE: &str = "5983d5bed6ff2b85cde020144977707f406cd2052cbe37f6e951057d4afef993a48401068f5a84c53eba12fb1be83d3f1bcd00409a453fba73ad19df8a713e0b";
+
+    #[test]
+    fn signed_manifests_are_accepted() {
+        let m = verify_manifest(TEST_MANIFEST.as_bytes(), TEST_SIGNATURE, TEST_KEY).unwrap();
+        assert_eq!(m.version, "0.4.99");
+        assert_eq!(m.secure_sha256, "", "releases from before glide-secure still read");
+        let with_newline = format!("{TEST_SIGNATURE}\n");
+        assert!(verify_manifest(TEST_MANIFEST.as_bytes(), &with_newline, TEST_KEY).is_ok());
+    }
+
+    #[test]
+    fn anything_else_is_refused() {
+        let tampered = TEST_MANIFEST.replace("ab", "ff");
+        assert!(verify_manifest(tampered.as_bytes(), TEST_SIGNATURE, TEST_KEY).is_err());
+        assert!(
+            verify_manifest(TEST_MANIFEST.as_bytes(), TEST_SIGNATURE, RELEASE_KEY).is_err(),
+            "signed with another key"
+        );
+        assert!(verify_manifest(TEST_MANIFEST.as_bytes(), "", TEST_KEY).is_err());
+        assert!(verify_manifest(TEST_MANIFEST.as_bytes(), "zz", TEST_KEY).is_err());
+        assert!(from_hex(RELEASE_KEY).is_some_and(|k| k.len() == 32));
     }
 
     fn temp_dir() -> PathBuf {

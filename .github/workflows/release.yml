@@ -5,6 +5,10 @@
 #
 # A failed Mac build never holds up Windows: the release then just has no
 # Mac files, and Macs stay on the version they have.
+#
+# The manifest (latest.toml) is signed with the GLIDE_SIGNING_KEY secret
+# (Ed25519); installed copies refuse a release whose signature doesn't check
+# out. Without the secret, nothing is published.
 
 name: release
 
@@ -61,6 +65,7 @@ jobs:
           path: |
             target/release/glide.exe
             target/release/glide-cli.exe
+            target/release/glide-secure.exe
 
   macos:
     runs-on: macos-latest # Apple Silicon
@@ -159,8 +164,13 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNING_KEY: ${{ secrets.GLIDE_SIGNING_KEY }}
         run: |
           set -euo pipefail
+          if [ -z "${SIGNING_KEY:-}" ]; then
+            echo "::error::GLIDE_SIGNING_KEY is missing: installed copies would refuse this release"
+            exit 1
+          fi
           cd release
           cp ../glide.example.toml .
           sha() { if [ -f "$1" ]; then sha256sum "$1" | cut -d' ' -f1; fi; }
@@ -168,13 +178,21 @@ jobs:
           version = "$GLIDE_VERSION"
           glide_sha256 = "$(sha glide.exe)"
           cli_sha256 = "$(sha glide-cli.exe)"
+          secure_sha256 = "$(sha glide-secure.exe)"
           macos_glide_sha256 = "$(sha glide-macos)"
           macos_cli_sha256 = "$(sha glide-cli-macos)"
           EOF
           sed -i 's/^[[:space:]]*//' latest.toml
           cat latest.toml
-          zip -j glide-windows.zip glide.exe glide-cli.exe glide.example.toml
-          files=(glide-windows.zip glide.exe glide-cli.exe latest.toml)
+          # Sign the manifest's exact bytes; the signature is stored as hex.
+          key="$RUNNER_TEMP/signing-key.pem"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          openssl pkeyutl -sign -inkey "$key" -rawin -in latest.toml -out latest.sig.bin
+          rm -f "$key"
+          od -An -tx1 latest.sig.bin | tr -d ' \n' > latest.toml.sig
+          rm latest.sig.bin
+          zip -j glide-windows.zip glide.exe glide-cli.exe glide-secure.exe glide.example.toml
+          files=(glide-windows.zip glide.exe glide-cli.exe glide-secure.exe latest.toml latest.toml.sig)
           for f in glide-macos.zip glide-macos glide-cli-macos; do
             if [ -f "$f" ]; then files+=("$f"); fi
           done

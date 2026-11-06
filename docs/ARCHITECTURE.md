@@ -177,6 +177,23 @@ blocked PC and leaves immediately if the active one becomes blocked
 (`tests/limbo.rs`). Network loss is the other limbo; both sides now give up
 after 1 s without traffic.
 
+**The sign-in screen** (Windows, opt-in). Only SYSTEM can inject on the
+Winlogon desktop, so `glide-secure.exe` runs as a service (session 0, no
+network code) and keeps a helper running as SYSTEM in the console session,
+following whichever desktop has the input
+(`platform/windows/signin/`). While the secure desktop is up, the client
+sends its input to the helper over a local pipe instead of injecting it, and
+stops reporting that screen as blocked. The pipe admits only high-integrity
+administrators (a normal program could otherwise answer UAC prompts for
+itself), and glide checks the pipe's server runs as SYSTEM before sending
+anything (PINs go through it). The service runs from `C:\Program
+Files\glide`, always a copy checked against the signed release manifest.
+
+**Signed releases.** `latest.toml` lists every file's SHA-256 and is signed
+in CI with an Ed25519 key (`GLIDE_SIGNING_KEY`); the public half is built
+into glide (`update.rs`), which refuses a manifest whose signature doesn't
+verify.
+
 **Shortcuts survive missed key releases.** Keys whose release goes
 elsewhere (Ctrl+Shift+Esc opening admin Task Manager, Win+L, Ctrl+Alt+Del)
 would look held forever and break exact shortcut matching. Before each key

@@ -54,6 +54,8 @@ pub struct Model<'a> {
     pub elevated: bool,
     /// An administrator-mode change is in progress (UAC prompt etc.).
     pub admin_busy: bool,
+    /// The sign-in screen service is installed (Windows).
+    pub signin: bool,
     /// What the updater is doing.
     pub update: crate::update::UpdateState,
 }

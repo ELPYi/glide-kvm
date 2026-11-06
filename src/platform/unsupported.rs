@@ -129,4 +129,18 @@ pub mod system {
     pub fn run_elevated(_args: &str) -> Result<()> {
         bail!(super::MSG)
     }
+
+    pub fn signin_installed() -> bool {
+        false
+    }
+
+    pub fn install_signin() -> Result<()> {
+        bail!(super::MSG)
+    }
+
+    pub fn remove_signin() -> Result<()> {
+        bail!(super::MSG)
+    }
+
+    pub fn refresh_signin() {}
 }

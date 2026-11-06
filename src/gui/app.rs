@@ -38,6 +38,8 @@ enum AdminChange {
     Disable,
     /// Admin mode is on; change whether its task starts glide at sign-in.
     SignIn(bool),
+    /// Install/remove the sign-in screen service.
+    SignInScreen(bool),
 }
 
 /// A client-side "pair with server" attempt running in the background.
@@ -65,6 +67,8 @@ pub struct App {
     /// Which shortcut is being recorded (the engine captures the keys).
     recording_hotkey: Option<HotkeyAction>,
     elevated: bool,
+    /// The sign-in screen service is installed.
+    signin: bool,
     admin_job: Option<(AdminChange, Receiver<anyhow::Result<()>>)>,
     /// Close the window at the end of this frame (handing off to the admin copy).
     close_requested: bool,
@@ -102,6 +106,7 @@ impl App {
             pair_job: None,
             recording_hotkey: None,
             elevated: system::is_elevated(),
+            signin: system::signin_installed(),
             admin_job: None,
             close_requested: false,
             notice: None,
@@ -111,6 +116,8 @@ impl App {
             updater,
         };
         app.set_up_sign_in();
+        // After an update, bring the sign-in screen service up to date too.
+        std::thread::spawn(system::refresh_signin);
         if let Some(w) = app.window {
             match tray::install(cc.egui_ctx.clone(), w, app.engine.clone()) {
                 Ok(t) => app.tray = Some(t),
@@ -241,6 +248,7 @@ impl App {
             Action::SetRunAsAdmin(on) => {
                 self.start_admin_job(if on { AdminChange::Enable } else { AdminChange::Disable })
             }
+            Action::SetSignInScreen(on) => self.start_admin_job(AdminChange::SignInScreen(on)),
             Action::SetAutostart(on) => match system::set_autostart(on) {
                 Ok(()) => {
                     self.autostart = system::autostart_enabled();
@@ -391,6 +399,10 @@ impl App {
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = match (change, elevated) {
+                (AdminChange::SignInScreen(true), true) => system::install_signin(),
+                (AdminChange::SignInScreen(true), false) => system::run_elevated("--install-signin"),
+                (AdminChange::SignInScreen(false), true) => system::remove_signin(),
+                (AdminChange::SignInScreen(false), false) => system::run_elevated("--remove-signin"),
                 (AdminChange::Disable, true) => system::remove_admin_task(),
                 (AdminChange::Disable, false) => system::run_elevated("--remove-admin-task"),
                 (_, true) => system::install_admin_task(sign_in),
@@ -405,11 +417,20 @@ impl App {
     }
 
     fn finish_admin_job(&mut self, change: AdminChange, result: anyhow::Result<()>) {
+        self.signin = system::signin_installed();
         if let Err(e) = result {
             self.notify(format!("{e:#}"), Tone::Bad);
             return;
         }
         match change {
+            AdminChange::SignInScreen(on) => {
+                let msg = if on {
+                    "Another PC can now type on this PC's sign-in screen"
+                } else {
+                    "Sign-in screen support removed"
+                };
+                self.notify(msg, Tone::Good);
+            }
             AdminChange::Enable => {
                 let sign_in = self.autostart;
                 self.saved.run_as_admin = true;
@@ -575,6 +596,7 @@ impl eframe::App for App {
             recording_hotkey: self.recording_hotkey,
             elevated: self.elevated,
             admin_busy: self.admin_job.is_some(),
+            signin: self.signin,
             update: self.updater.state(),
         };
 

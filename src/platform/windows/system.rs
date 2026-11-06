@@ -23,6 +23,9 @@ pub use super::admin::{
     run_admin_task, run_elevated, ADMIN_TASK, FROM_TASK_ARG,
 };
 pub use super::instance::{claim_single_instance, find_running_window, InstanceGuard};
+pub use super::signin::install::{
+    install as install_signin, installed as signin_installed, refresh as refresh_signin, remove as remove_signin,
+};
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "glide";

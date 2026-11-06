@@ -573,4 +573,17 @@ fn startup(ui: &mut Ui, m: &Model, draft: &mut Config, actions: &mut Actions) {
             });
         },
     );
+    field(
+        ui,
+        "Sign-in screen",
+        Some("Lets the PC you share from type your PIN on this PC's lock screen and click its UAC prompts, which Windows otherwise keeps out of reach. Needs glide to run as administrator. Adds a small Windows service; turning this off removes it."),
+        |ui| {
+            let mut on = m.signin;
+            let toggle = egui::Checkbox::new(&mut on, "Control this PC's sign-in screen from another PC");
+            let allowed = !m.admin_busy && (m.saved.run_as_admin || m.signin);
+            if ui.add_enabled(allowed, toggle).changed() {
+                actions.push(Action::SetSignInScreen(on));
+            }
+        },
+    );
 }
