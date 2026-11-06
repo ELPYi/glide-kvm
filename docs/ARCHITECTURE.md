@@ -83,9 +83,11 @@ records what would have been injected.
 
 **Latency first.**
 - Captured events are encrypted and sent *inside the OS hook callback*, with
-  no queue or thread hop. Mouse motion is fire-and-forget UDP. Keys, buttons
-  and wheel use a tiny ack/retransmit layer, so a lost packet can't leave a
-  key stuck.
+  no queue or thread hop. Mouse motion is fire-and-forget UDP, but each packet
+  carries a running total (`MotionTally`), so the next one to arrive makes up
+  for any a busy Wi-Fi dropped and the cursor never falls short of the hand.
+  Keys, buttons and wheel use a tiny ack/retransmit layer, so a lost packet
+  can't leave a key stuck.
 - Measured end-to-end in software: ~10 µs at p50 (`cargo test latency -- --nocapture`).
 - Mouse motion comes from Raw Input (unaccelerated); the receiving PC applies
   its own pointer acceleration, so the feel matches its local mouse.
@@ -312,8 +314,10 @@ packet = [magic 'G'][dir][session u64][counter u64]  ++  ChaCha20-Poly1305(messa
 - **Key**: `SHA-256("glide-v1" ‖ secret ‖ session)`. Each server run picks a
   new `session` (its start time in µs), so keys rotate per run.
 - **Replay protection**: a 64-packet sliding window over `counter`.
-- **Server → client**: `Heartbeat{sent_micros, wants_sound}`, `Motion{dx,dy}` (unreliable),
-  `Reliable{seq, Enter{side, frac, feel} | Leave | Input}`, `Clip`.
+- **Server → client**: `Heartbeat{sent_micros, wants_sound}`, `Motion{dx,dy,tally}` (unreliable;
+  the client moves by the tally's difference from the last one it saw),
+  `Reliable{seq, Enter{side, frac, feel, tally} | Leave | Input}`, `Clip`. The
+  tallies are appended fields, so older versions read and send the old form.
 - **Client → server**: `Pong{instance, echo_micros}` (gives RTT),
   `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock`, `Audio{stream, seq, opus}`, `Clip`.
 - **Clipboard** (`Clip`, both ways): `Chunk{id, index, total, data}` (≤1100 bytes of the

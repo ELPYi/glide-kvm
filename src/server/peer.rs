@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::config::ClientEntry;
 use crate::input::InputBlock;
 use crate::net::crypto::ReplayWindow;
-use crate::net::protocol::ReliableEv;
+use crate::net::protocol::{MotionTally, ReliableEv};
 use crate::net::reliable::Outbox;
 use crate::status::PeerStatus;
 
@@ -39,6 +39,8 @@ pub struct Peer {
     pub last_heartbeat: Option<Instant>,
     /// Latest report: it can't accept input (from every pong).
     pub blocked: Option<InputBlock>,
+    /// All the motion sent to it so far (see [`MotionTally`]).
+    pub motion: MotionTally,
     /// Pongs in a row that said it isn't being controlled while it should be.
     let_go: u32,
     rtt: RttStats,
@@ -57,6 +59,7 @@ impl Peer {
             outbox: Outbox::new(OUTBOX_CAPACITY),
             last_heartbeat: None,
             blocked: None,
+            motion: MotionTally::default(),
             let_go: 0,
             rtt: RttStats::default(),
         }

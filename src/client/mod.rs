@@ -35,7 +35,7 @@ use crate::input::{Button, InputBlock, InputEvent, Side};
 use crate::log;
 use crate::net::addr::resolve;
 use crate::net::crypto::{self, Cipher, ReplayWindow};
-use crate::net::protocol::{ClientMsg, ReliableEv, ServerMsg};
+use crate::net::protocol::{ClientMsg, MotionTally, ReliableEv, ServerMsg};
 use crate::net::reliable::Inbox;
 use crate::platform::{self, Desktop};
 use crate::status::ClientStatus;
@@ -233,6 +233,9 @@ struct Client {
     inbox: Inbox<ReliableEv>,
     /// Motion received but not yet injected (merged across a drain).
     pending_motion: (i32, i32),
+    /// The newest motion tally seen while being controlled (`None` from
+    /// servers older than 0.4.27): see [`MotionTally`].
+    motion_tally: Option<MotionTally>,
     /// Latest "can't accept input" state, and when it was checked.
     block: Option<InputBlock>,
     block_checked: Option<Instant>,
@@ -281,6 +284,7 @@ impl Client {
             last_knock: None,
             inbox: Inbox::new(INBOX_CAPACITY),
             pending_motion: (0, 0),
+            motion_tally: None,
             block: None,
             block_checked: None,
             active: false,
@@ -541,7 +545,7 @@ impl Client {
                     active: Some(self.active),
                 });
             }
-            ServerMsg::Motion { dx, dy } => self.on_motion(dx, dy),
+            ServerMsg::Motion { dx, dy, tally } => self.on_motion(dx, dy, tally),
             ServerMsg::Reliable { seq, ev } => {
                 // Motion first, so a click lands where the cursor actually is.
                 self.flush_motion();
@@ -592,13 +596,27 @@ impl Client {
         self.cipher = Some(cipher);
         self.replay = ReplayWindow::default();
         self.inbox.reset();
+        self.motion_tally = None;
     }
 
-    fn on_motion(&mut self, dx: i32, dy: i32) {
-        if self.active {
-            self.pending_motion.0 = self.pending_motion.0.saturating_add(dx);
-            self.pending_motion.1 = self.pending_motion.1.saturating_add(dy);
+    fn on_motion(&mut self, dx: i32, dy: i32, tally: Option<MotionTally>) {
+        if !self.active {
+            return;
         }
+        // Move by everything since the last packet seen, which includes any
+        // lost in between; a late packet is already counted.
+        let (dx, dy) = match (self.motion_tally, tally) {
+            (Some(last), Some(now)) => match last.since(&now) {
+                Some(d) => d,
+                None => return,
+            },
+            _ => (dx, dy),
+        };
+        if tally.is_some() {
+            self.motion_tally = tally;
+        }
+        self.pending_motion.0 = self.pending_motion.0.saturating_add(dx);
+        self.pending_motion.1 = self.pending_motion.1.saturating_add(dy);
     }
 
     /// Inject the merged motion (or hand control back at the entry edge).
@@ -622,10 +640,18 @@ impl Client {
 
     fn apply(&mut self, ev: ReliableEv) {
         match ev {
-            ReliableEv::Enter { side, frac, feel } => {
+            ReliableEv::Enter {
+                side,
+                frac,
+                feel,
+                tally,
+            } => {
                 self.release_all();
                 self.active = true;
                 self.entry_side = side;
+                // This visit's movement counts from here, so nothing lost
+                // before it (or since, before this arrived) goes missing.
+                self.motion_tally = tally;
                 // Feel exactly like the sharing PC's mouse (or keep our own).
                 self.desktop.set_pointer_feel(feel);
                 self.desktop.warp_to_edge(side, frac);

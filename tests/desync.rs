@@ -178,6 +178,7 @@ fn lets_go_when_the_sharing_pc_stopped_controlling_it() {
             side: Side::Left,
             frac: 0.5,
             feel: None,
+            tally: None,
         },
     });
     wait_for("being controlled", || client.status().active);

@@ -472,9 +472,16 @@ impl Server {
     }
 
     fn flush_motion(&self, st: &mut State, now: Instant) {
-        let addr = st.switcher.active().and_then(|i| st.peers[i].addr);
-        if let (Some((dx, dy)), Some(addr)) = (st.motion.take(now), addr) {
-            self.send(addr, &ServerMsg::Motion { dx, dy });
+        let Some((dx, dy)) = st.motion.take(now) else {
+            return;
+        };
+        let Some(p) = st.switcher.active().and_then(|i| st.peers.get_mut(i)) else {
+            return;
+        };
+        if let Some(addr) = p.addr {
+            p.motion.add(dx, dy);
+            let tally = Some(p.motion);
+            self.send(addr, &ServerMsg::Motion { dx, dy, tally });
         }
     }
 
@@ -493,7 +500,16 @@ impl Server {
                     .flatten();
                 let p = &mut st.peers[peer];
                 let side = p.entry.side.opposite();
-                self.send_reliable(p, ReliableEv::Enter { side, frac, feel });
+                let tally = Some(p.motion);
+                self.send_reliable(
+                    p,
+                    ReliableEv::Enter {
+                        side,
+                        frac,
+                        feel,
+                        tally,
+                    },
+                );
                 // The cursor is "over there" now, so don't leave it parked here.
                 self.desktop.set_cursor_hidden(true);
                 log!("-> {}", p.entry.name);

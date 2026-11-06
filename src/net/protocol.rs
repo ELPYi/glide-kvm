@@ -24,8 +24,13 @@ pub enum ServerMsg {
         wants_sound: bool,
         controlling: Option<bool>,
     },
-    /// Unreliable: a lost motion packet is just a skipped pixel or two.
-    Motion { dx: i32, dy: i32 },
+    /// Unreliable, but `tally` (appended in 0.4.27; `None` from older
+    /// servers) lets the client make up for lost packets: see [`MotionTally`].
+    Motion {
+        dx: i32,
+        dy: i32,
+        tally: Option<MotionTally>,
+    },
     /// Delivered in order, acked and retransmitted (see [`super::reliable`]).
     Reliable { seq: u32, ev: ReliableEv },
     /// Part of a clipboard, or an ack for one (see `crate::clip`).
@@ -36,10 +41,13 @@ pub enum ServerMsg {
 pub enum ReliableEv {
     /// Client becomes active; place its cursor on `side` at `frac` along that
     /// edge. `feel`: pointer settings to mirror while active (None = keep its own).
+    /// `tally`: the motion tally so far, where this visit's movement starts
+    /// (appended in 0.4.27; `None` from older servers).
     Enter {
         side: Side,
         frac: f32,
         feel: Option<PointerFeel>,
+        tally: Option<MotionTally>,
     },
     /// Client becomes inactive; release everything held.
     Leave,
@@ -47,6 +55,50 @@ pub enum ReliableEv {
     Notice(Notice),
     /// Key / button / wheel (never motion).
     Input(InputEvent),
+}
+
+/// Everything the server has sent one client as motion: how many packets,
+/// and their movement added up (both wrapping). Each motion packet carries
+/// the tally including itself, so the client moves by the difference from
+/// the last one it saw: a packet lost on a busy network is made up for by
+/// the next one, instead of the cursor falling short of the hand, and a
+/// late one is ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MotionTally {
+    pub packets: u32,
+    pub x: i32,
+    pub y: i32,
+}
+
+impl MotionTally {
+    pub fn add(&mut self, dx: i32, dy: i32) {
+        self.packets = self.packets.wrapping_add(1);
+        self.x = self.x.wrapping_add(dx);
+        self.y = self.y.wrapping_add(dy);
+    }
+
+    /// The movement from `self` to `later`, or `None` if `later` isn't newer.
+    pub fn since(&self, later: &MotionTally) -> Option<(i32, i32)> {
+        let ahead = later.packets.wrapping_sub(self.packets);
+        if ahead == 0 || ahead > u32::MAX / 2 {
+            return None;
+        }
+        Some((later.x.wrapping_sub(self.x), later.y.wrapping_sub(self.y)))
+    }
+}
+
+fn write_tally(w: &mut W, t: &Option<MotionTally>) {
+    if let Some(t) = t {
+        w.u32(t.packets).i32(t.x).i32(t.y);
+    }
+}
+
+fn read_tally(r: &mut R<'_>) -> Option<MotionTally> {
+    Some(MotionTally {
+        packets: r.u32()?,
+        x: r.i32()?,
+        y: r.i32()?,
+    })
 }
 
 /// Confirmations shown on screen (see `Desktop::notify`).
@@ -255,18 +307,25 @@ impl ServerMsg {
                     w.u8(*c as u8);
                 }
             }
-            ServerMsg::Motion { dx, dy } => {
+            ServerMsg::Motion { dx, dy, tally } => {
                 w.u8(0x02).i32(*dx).i32(*dy);
+                write_tally(&mut w, tally);
             }
             ServerMsg::Reliable { seq, ev } => {
                 w.u8(0x03).u32(*seq);
                 match ev {
-                    ReliableEv::Enter { side, frac, feel } => {
+                    ReliableEv::Enter {
+                        side,
+                        frac,
+                        feel,
+                        tally,
+                    } => {
                         w.u8(0x10).u8(side.to_u8()).f32(*frac);
                         match feel {
                             Some(f) => w.u8(1).u8(f.speed).u8(f.acceleration as u8),
                             None => w.u8(0),
                         };
+                        write_tally(&mut w, tally);
                     }
                     ReliableEv::Leave => {
                         w.u8(0x11);
@@ -299,6 +358,7 @@ impl ServerMsg {
             0x02 => ServerMsg::Motion {
                 dx: r.i32()?,
                 dy: r.i32()?,
+                tally: read_tally(&mut r),
             },
             0x03 => {
                 let seq = r.u32()?;
@@ -313,6 +373,7 @@ impl ServerMsg {
                                 acceleration: r.bool()?,
                             }),
                         },
+                        tally: read_tally(&mut r),
                     },
                     0x11 => ReliableEv::Leave,
                     0x13 => ReliableEv::Notice(Notice::from_u8(r.u8()?)?),
@@ -414,13 +475,40 @@ mod tests {
                 wants_sound: true,
                 controlling: None,
             },
-            ServerMsg::Motion { dx: -5, dy: 1200 },
+            ServerMsg::Motion {
+                dx: -5,
+                dy: 1200,
+                tally: None,
+            },
+            ServerMsg::Motion {
+                dx: 3,
+                dy: -1,
+                tally: Some(MotionTally {
+                    packets: u32::MAX,
+                    x: i32::MIN,
+                    y: 77,
+                }),
+            },
             ServerMsg::Reliable {
                 seq: 7,
                 ev: ReliableEv::Enter {
                     side: Side::Left,
                     frac: 0.25,
                     feel: None,
+                    tally: None,
+                },
+            },
+            ServerMsg::Reliable {
+                seq: 14,
+                ev: ReliableEv::Enter {
+                    side: Side::Right,
+                    frac: 0.5,
+                    feel: None,
+                    tally: Some(MotionTally {
+                        packets: 9,
+                        x: -4,
+                        y: 2,
+                    }),
                 },
             },
             ServerMsg::Reliable {
@@ -436,6 +524,7 @@ mod tests {
                         speed: 7,
                         acceleration: true,
                     }),
+                    tally: Some(MotionTally::default()),
                 },
             },
             ServerMsg::Reliable {
@@ -468,6 +557,53 @@ mod tests {
         for m in msgs {
             assert_eq!(ServerMsg::decode(&m.encode()), Some(m));
         }
+    }
+
+    #[test]
+    fn motion_reads_both_ways_with_older_versions() {
+        let new = ServerMsg::Motion {
+            dx: 4,
+            dy: -2,
+            tally: Some(MotionTally {
+                packets: 3,
+                x: 10,
+                y: 5,
+            }),
+        }
+        .encode();
+        // An older client reads just the movement, and ignores the rest.
+        assert_eq!(&new[..9], &[0x02, 4, 0, 0, 0, 0xfe, 0xff, 0xff, 0xff][..]);
+        // An older server's packet reads as having no tally.
+        assert_eq!(
+            ServerMsg::decode(&new[..9]),
+            Some(ServerMsg::Motion {
+                dx: 4,
+                dy: -2,
+                tally: None
+            })
+        );
+    }
+
+    #[test]
+    fn tally_gives_the_movement_since_and_skips_stale_ones() {
+        let mut t = MotionTally::default();
+        let start = t;
+        t.add(5, 1);
+        let lost = t;
+        t.add(-2, 3);
+        assert_eq!(start.since(&t), Some((3, 4)), "the lost packet is made up for");
+        assert_eq!(t.since(&lost), None, "a late packet adds nothing");
+        assert_eq!(t.since(&t), None, "nor does a repeat");
+        // Across the wrap of every counter.
+        let edge = MotionTally {
+            packets: u32::MAX,
+            x: i32::MAX,
+            y: i32::MIN,
+        };
+        let mut next = edge;
+        next.add(2, -3);
+        assert_eq!(next.packets, 0);
+        assert_eq!(edge.since(&next), Some((2, -3)));
     }
 
     #[test]
