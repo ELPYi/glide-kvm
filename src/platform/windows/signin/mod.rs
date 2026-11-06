@@ -13,6 +13,9 @@
 //! - **glide** (as the controlled PC) keeps doing all the networking. While
 //!   the protected desktop is up it sends input to the helper ([`link`])
 //!   instead of injecting it itself, so the PC you're at keeps control.
+//! - **While no glide runs** in the session (just restarted, nobody signed
+//!   in yet), the helper connects to the sharing PC itself ([`standby`]),
+//!   and hands back when glide starts.
 //!
 //! Only programs running as administrator can open the pipe (anything else
 //! could otherwise click "Yes" on a UAC prompt for itself), so this needs
@@ -26,9 +29,18 @@ pub mod helper;
 pub mod install;
 pub mod link;
 pub mod service;
+pub mod standby;
 
+use std::cell::RefCell;
 use std::io::Write as _;
 use std::path::PathBuf;
+use std::ptr::null_mut;
+use std::time::{Duration, Instant};
+
+use windows_sys::Win32::Foundation::{GetLastError, HANDLE};
+use windows_sys::Win32::System::StationsAndDesktops::{
+    CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, SetThreadDesktop, HDESK, UOI_NAME,
+};
 
 use crate::input::InputEvent;
 use crate::net::protocol::{decode_input, encode_input};
@@ -172,8 +184,85 @@ fn log(line: &str) {
     }
 }
 
-/// Where the service's copy lives: `C:\Program Files\glide`.
-fn install_dir() -> Option<PathBuf> {
+/// The helper's settings when it's the client itself (see [`standby`]).
+pub(crate) fn standby_config_path() -> Option<PathBuf> {
+    install_dir().map(|d| d.join("signin.toml"))
+}
+
+/// How often a thread checks for the input moving to another desktop.
+const DESKTOP_CHECK: Duration = Duration::from_millis(50);
+
+thread_local! {
+    static INPUT_DESKTOP: RefCell<InputDesktop> = const {
+        RefCell::new(InputDesktop { handle: null_mut(), is_default: false, checked: None })
+    };
+}
+
+/// Move this thread to whichever desktop has the input (the sign-in screen
+/// or the normal one): input can only be sent to, and the cursor read on,
+/// the thread's own desktop. Cheap to call often. Returns whether it's the
+/// normal desktop. Only for threads with no windows (Windows' rule).
+pub(crate) fn follow_input_desktop() -> bool {
+    INPUT_DESKTOP.with(|d| d.borrow_mut().follow())
+}
+
+struct InputDesktop {
+    handle: HDESK,
+    is_default: bool,
+    checked: Option<Instant>,
+}
+
+impl InputDesktop {
+    fn follow(&mut self) -> bool {
+        if self.checked.is_some_and(|t| t.elapsed() < DESKTOP_CHECK) {
+            return self.is_default;
+        }
+        self.checked = Some(Instant::now());
+        const GENERIC_ALL: u32 = 0x1000_0000;
+        unsafe {
+            let input = OpenInputDesktop(0, 0, GENERIC_ALL);
+            if input.is_null() {
+                return self.is_default;
+            }
+            let name = desktop_name(input);
+            if !self.handle.is_null() && name == desktop_name(self.handle) {
+                CloseDesktop(input);
+                return self.is_default;
+            }
+            if SetThreadDesktop(input) == 0 {
+                log(&format!("couldn't switch to the {name} desktop ({})", GetLastError()));
+                CloseDesktop(input);
+                return self.is_default;
+            }
+            if !self.handle.is_null() {
+                CloseDesktop(self.handle);
+            }
+            self.handle = input;
+            self.is_default = name.eq_ignore_ascii_case("Default");
+        }
+        self.is_default
+    }
+}
+
+fn desktop_name(desk: HDESK) -> String {
+    let mut name = [0u16; 64];
+    let mut needed = 0u32;
+    unsafe {
+        GetUserObjectInformationW(
+            desk as HANDLE,
+            UOI_NAME,
+            name.as_mut_ptr().cast(),
+            (name.len() * 2) as u32,
+            &mut needed,
+        );
+    }
+    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    String::from_utf16_lossy(&name[..len])
+}
+
+/// Where the service's copy (and admin mode's copy of glide) lives:
+/// `C:\Program Files\glide`.
+pub(crate) fn install_dir() -> Option<PathBuf> {
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::UI::Shell::{FOLDERID_ProgramFiles, SHGetKnownFolderPath};
     unsafe {

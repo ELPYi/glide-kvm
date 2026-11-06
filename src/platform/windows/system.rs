@@ -19,12 +19,13 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 use super::wide;
 
 pub use super::admin::{
-    admin_task_installed, admin_task_starts_at_sign_in, install_admin_task, is_elevated, remove_admin_task,
-    run_admin_task, run_elevated, ADMIN_TASK, FROM_TASK_ARG,
+    admin_task_installed, admin_task_starts_at_sign_in, install_admin_task, is_elevated, protect_admin_task,
+    remove_admin_task, run_admin_task, run_elevated, ADMIN_TASK, FROM_TASK_ARG, HOME_ARG,
 };
 pub use super::instance::{claim_single_instance, find_running_window, InstanceGuard};
 pub use super::signin::install::{
     install as install_signin, installed as signin_installed, refresh as refresh_signin, remove as remove_signin,
+    sync_config as sync_signin_config,
 };
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";

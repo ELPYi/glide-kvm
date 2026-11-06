@@ -187,3 +187,10 @@ pub fn remove_signin() -> Result<()> {
 }
 
 pub fn refresh_signin() {}
+
+pub fn sync_signin_config(_cfg: &crate::config::Config) {}
+
+pub fn protect_admin_task() {}
+
+/// Windows' admin copy uses it; parsed everywhere.
+pub const HOME_ARG: &str = "--home";

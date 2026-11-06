@@ -115,6 +115,28 @@ impl Engine {
         Ok(Engine { inner })
     }
 
+    /// Just the client: no clipboard or sound (the sign-in screen helper
+    /// uses it while no glide runs in the session).
+    pub fn start_headless_client(cfg: &Config) -> Result<Engine> {
+        cfg.validate(Role::Client)?;
+        let desktop = platform::desktop()?;
+        let sock = bind_with_retry(cfg.port)?;
+        let opts = ClientOptions {
+            secret: cfg.secret.clone(),
+            server_address: cfg.server_address.clone(),
+            server_port: cfg.port,
+            games: cfg.games.clone(),
+        };
+        let handle = client::start(sock, desktop, opts)?;
+        Ok(Engine {
+            inner: Inner::Client {
+                handle: Some(handle),
+                sharer: None,
+                clip: None,
+            },
+        })
+    }
+
     pub fn status(&self) -> EngineStatus {
         match &self.inner {
             Inner::Server { server, .. } => EngineStatus::Server(server.status()),

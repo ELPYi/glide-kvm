@@ -72,7 +72,9 @@ impl WinDesktop {
 pub fn desktop() -> Result<Arc<dyn Desktop>> {
     super::init_dpi();
     // In case an earlier run was killed while the cursor was hidden.
-    super::cursor::restore();
+    if !super::helper_mode() {
+        super::cursor::restore();
+    }
     Ok(Arc::new(WinDesktop::new()))
 }
 
@@ -193,13 +195,19 @@ pub(super) fn inject_event(ev: &InputEvent) {
 
 impl Desktop for WinDesktop {
     fn inject(&self, ev: &InputEvent) {
-        if self.helper(Request::Inject(*ev)).is_none() {
+        if super::helper_mode() {
+            super::signin::follow_input_desktop();
+            inject_event(ev);
+        } else if self.helper(Request::Inject(*ev)).is_none() {
             inject_event(ev);
         }
     }
 
     fn warp_to_edge(&self, side: Side, frac: f32) {
         let (x, y) = self.layout().entry_point(side, frac);
+        if super::helper_mode() {
+            super::signin::follow_input_desktop();
+        }
         if self.helper(Request::Warp { x, y }).is_none() {
             unsafe {
                 SetCursorPos(x, y);
@@ -208,6 +216,9 @@ impl Desktop for WinDesktop {
     }
 
     fn edge_hit(&self, dx: i32, dy: i32) -> Option<EdgeHit> {
+        if super::helper_mode() {
+            super::signin::follow_input_desktop();
+        }
         let (x, y) = match self.helper(Request::Status) {
             Some(reply) => reply.cursor?,
             None => cursor_pos().map(|p| (p.x, p.y))?,
@@ -216,11 +227,15 @@ impl Desktop for WinDesktop {
     }
 
     fn notify(&self, text: &str) {
-        super::osd::show(text);
+        if !super::helper_mode() {
+            super::osd::show(text);
+        }
     }
 
     fn set_cursor_hidden(&self, hidden: bool) {
-        super::cursor::set_hidden(hidden);
+        if !super::helper_mode() {
+            super::cursor::set_hidden(hidden);
+        }
     }
 
     fn cursor_position(&self) -> Option<(i32, i32)> {
@@ -232,6 +247,9 @@ impl Desktop for WinDesktop {
     }
 
     fn input_block(&self) -> Option<InputBlock> {
+        if super::helper_mode() {
+            return None; // SYSTEM, on whichever desktop has the input
+        }
         let block = super::blocking::input_block(self.elevated);
         // The sign-in screen: fine if the helper can reach it for us (only
         // possible as administrator).
@@ -252,6 +270,8 @@ impl Desktop for WinDesktop {
     }
 
     fn set_pointer_feel(&self, feel: Option<PointerFeel>) {
-        super::pointer::set(feel);
+        if !super::helper_mode() {
+            super::pointer::set(feel);
+        }
     }
 }

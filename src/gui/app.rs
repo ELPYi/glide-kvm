@@ -116,8 +116,12 @@ impl App {
             updater,
         };
         app.set_up_sign_in();
-        // After an update, bring the sign-in screen service up to date too.
-        std::thread::spawn(system::refresh_signin);
+        // Admin mode set up by an older version moves to Program Files, and
+        // after an update the sign-in screen service is brought up to date.
+        std::thread::spawn(|| {
+            system::protect_admin_task();
+            system::refresh_signin();
+        });
         if let Some(w) = app.window {
             match tray::install(cc.egui_ctx.clone(), w, app.engine.clone()) {
                 Ok(t) => app.tray = Some(t),
@@ -180,7 +184,13 @@ impl App {
 
     fn save(&mut self) -> bool {
         match self.saved.save(&self.config_path) {
-            Ok(()) => true,
+            Ok(()) => {
+                if self.signin {
+                    let cfg = self.saved.clone();
+                    std::thread::spawn(move || system::sync_signin_config(&cfg));
+                }
+                true
+            }
             Err(e) => {
                 self.notify(format!("Couldn't save: {e:#}"), Tone::Bad);
                 false
@@ -663,7 +673,12 @@ fn start_updater(cfg: &Config, engine: EngineSlot, window: Option<isize>) -> Arc
                 Err(e) => return log!("can't restart into {version}: {e}"),
             };
             engine.stop(); // restore normal input and free the port first
-            match std::process::Command::new(exe).args(&args).spawn() {
+            let mut command = std::process::Command::new(exe);
+            command.args(&args);
+            if let Some(home) = crate::config::home_override() {
+                command.arg(system::HOME_ARG).arg(home);
+            }
+            match command.spawn() {
                 Ok(_) => std::process::exit(0),
                 // The new files are in place; they'll run next launch.
                 Err(e) => log!("couldn't restart into {version}: {e}"),

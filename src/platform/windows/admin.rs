@@ -8,6 +8,13 @@
 //! task set to "run with highest privileges". Starting that task never shows
 //! a UAC prompt, so from then on `glide.exe` simply hands off to it. The same
 //! task can also start glide at sign-in.
+//!
+//! The task runs a copy of glide in `C:\Program Files\glide`, not the one in
+//! your own folder: any program can change files there, and one that
+//! replaced glide.exe would otherwise get admin rights the next time glide
+//! started. The copy is always checked against the signed release (or, in a
+//! local build, is the running program), and `--home` points it back at your
+//! folder for its settings.
 
 use std::ffi::OsStr;
 use std::mem::{size_of, zeroed};
@@ -29,6 +36,8 @@ use super::wide;
 pub const ADMIN_TASK: &str = "glide (administrator)";
 /// Flag that the task-started instance uses to tell how it was launched.
 pub const FROM_TASK_ARG: &str = "--from-task";
+/// Followed by the folder holding glide.toml (see `config::set_home`).
+pub const HOME_ARG: &str = "--home";
 const NO_WINDOW: u32 = 0x0800_0000; // CREATE_NO_WINDOW: no console flash
 
 /// Is this process running with administrator rights?
@@ -89,10 +98,64 @@ fn app_exe() -> Result<PathBuf> {
     Ok(std::env::current_exe()?.with_file_name("glide.exe"))
 }
 
+/// The administrator copy: `C:\Program Files\glide\glide.exe`.
+fn protected_exe() -> Result<PathBuf> {
+    Ok(super::signin::install_dir()
+        .context("couldn't find the Program Files folder")?
+        .join("glide.exe"))
+}
+
+/// Put this version of glide in Program Files (if it isn't already).
+/// Must run as administrator.
+fn install_protected_copy() -> Result<PathBuf> {
+    use crate::update::{install, sha256_hex, stage, APP_EXE};
+    let target = protected_exe()?;
+    let program = if crate::is_release_build() {
+        crate::update::verified_release_file(APP_EXE)?
+    } else {
+        std::fs::read(std::env::current_exe()?).context("reading glide.exe")?
+    };
+    if std::fs::read(&target).is_ok_and(|b| b == program) {
+        return Ok(target);
+    }
+    if let Some(dir) = target.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    }
+    // It may be the copy that's running: swap it the way updates do.
+    stage(&target, &program, &sha256_hex(&program))?;
+    install(&target)?;
+    Ok(target)
+}
+
+/// Does the admin task run the Program Files copy? (Older versions pointed
+/// it at your own folder.)
+fn task_runs_protected_copy() -> bool {
+    let Ok(exe) = protected_exe() else { return false };
+    schtasks(["/Query", "/TN", ADMIN_TASK, "/XML"]).is_ok_and(|xml| {
+        xml.contains(&format!(
+            "<Command>{}</Command>",
+            xml_escape(&exe.display().to_string())
+        ))
+    })
+}
+
+/// Admin mode set up by an older version: move it to the Program Files
+/// copy. Runs in the administrator copy at startup; quick when there's
+/// nothing to do.
+pub fn protect_admin_task() {
+    if !is_elevated() || !admin_task_installed() || task_runs_protected_copy() {
+        return;
+    }
+    match install_admin_task(admin_task_starts_at_sign_in()) {
+        Ok(()) => crate::log!("admin mode now runs glide from Program Files"),
+        Err(e) => crate::log!("couldn't move admin mode to Program Files: {e:#}"),
+    }
+}
+
 /// The task definition. Notable choices: normal priority (Task Scheduler's
 /// default would run glide below normal) and no time limit (the default
 /// stops tasks after 72 hours).
-fn task_xml(exe: &str, dir: &str, user: &str, at_sign_in: bool) -> String {
+fn task_xml(exe: &str, args: &str, dir: &str, user: &str, at_sign_in: bool) -> String {
     let trigger = if at_sign_in {
         format!("<LogonTrigger><Enabled>true</Enabled><UserId>{user}</UserId></LogonTrigger>")
     } else {
@@ -121,7 +184,7 @@ fn task_xml(exe: &str, dir: &str, user: &str, at_sign_in: bool) -> String {
   <Actions Context="Author">
     <Exec>
       <Command>{exe}</Command>
-      <Arguments>{FROM_TASK_ARG}</Arguments>
+      <Arguments>{args}</Arguments>
       <WorkingDirectory>{dir}</WorkingDirectory>
     </Exec>
   </Actions>
@@ -132,8 +195,14 @@ fn task_xml(exe: &str, dir: &str, user: &str, at_sign_in: bool) -> String {
 
 /// Create (or replace) the admin task. Must run as administrator.
 pub fn install_admin_task(at_sign_in: bool) -> Result<()> {
-    let exe = app_exe()?;
+    let exe = install_protected_copy()?;
     let dir = exe.parent().map(|d| d.display().to_string()).unwrap_or_default();
+    // Your own glide folder, where the settings are.
+    let home = crate::config::default_path()
+        .parent()
+        .map(|d| d.display().to_string())
+        .context("couldn't tell where glide's settings are")?;
+    let args = format!("{FROM_TASK_ARG} {HOME_ARG} \"{home}\"");
     let user = match (std::env::var("USERDOMAIN"), std::env::var("USERNAME")) {
         (Ok(d), Ok(u)) => format!("{d}\\{u}"),
         (_, Ok(u)) => u,
@@ -141,6 +210,7 @@ pub fn install_admin_task(at_sign_in: bool) -> Result<()> {
     };
     let xml = task_xml(
         &xml_escape(&exe.display().to_string()),
+        &xml_escape(&args),
         &xml_escape(&dir),
         &xml_escape(&user),
         at_sign_in,
@@ -196,7 +266,13 @@ mod tests {
 
     #[test]
     fn task_definition() {
-        let with = task_xml("C:\\glide\\glide.exe", "C:\\glide", "PC\\me", true);
+        let with = task_xml(
+            "C:\\Program Files\\glide\\glide.exe",
+            "--from-task --home &quot;C:\\Users\\me\\glide&quot;",
+            "C:\\Program Files\\glide",
+            "PC\\me",
+            true,
+        );
         assert!(with.contains("<LogonTrigger>"));
         assert!(with.contains("<RunLevel>HighestAvailable</RunLevel>"));
         assert!(
@@ -208,7 +284,8 @@ mod tests {
             "normal priority, not below normal"
         );
         assert!(with.contains(FROM_TASK_ARG));
-        assert!(!task_xml("a", "b", "c", false).contains("LogonTrigger"));
+        assert!(with.contains("<Arguments>--from-task --home &quot;C:\\Users\\me\\glide&quot;</Arguments>"));
+        assert!(!task_xml("a", "", "b", "c", false).contains("LogonTrigger"));
         assert_eq!(xml_escape("a&b<c>"), "a&amp;b&lt;c&gt;");
     }
 
@@ -235,8 +312,16 @@ mod schtasks_check {
             std::env::var("USERDOMAIN").unwrap(),
             std::env::var("USERNAME").unwrap()
         );
-        let xml = task_xml(r"C:\Windows\System32\cmd.exe", r"C:\Windows", &xml_escape(&user), true)
-            .replace("HighestAvailable", "LeastPrivilege");
+        // The real arguments' shape: a quoted folder with spaces.
+        let args = format!(r#"{FROM_TASK_ARG} {HOME_ARG} "C:\Users\Some One\glide""#);
+        let xml = task_xml(
+            r"C:\Windows\System32\cmd.exe",
+            &xml_escape(&args),
+            r"C:\Windows",
+            &xml_escape(&user),
+            true,
+        )
+        .replace("HighestAvailable", "LeastPrivilege");
         let mut bytes = vec![0xFF, 0xFE];
         bytes.extend(xml.encode_utf16().flat_map(u16::to_le_bytes));
         let path = std::env::temp_dir().join("glide-selfcheck.xml");
@@ -248,6 +333,10 @@ mod schtasks_check {
         created.expect("Windows rejected the task definition");
         let q = query.unwrap();
         assert!(q.contains("LogonTrigger") && q.contains("PT0S"), "{q}");
+        assert!(
+            q.contains(&format!("<Arguments>{args}</Arguments>")),
+            "arguments kept as given: {q}"
+        );
         eprintln!("task definition accepted by Task Scheduler");
     }
 }

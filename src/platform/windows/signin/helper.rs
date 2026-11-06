@@ -1,9 +1,11 @@
 //! The helper: runs as SYSTEM in the session at the screen (started by the
-//! service), serves glide's requests over a pipe, and injects them into
-//! whichever desktop has the input, the sign-in screen included.
+//! service). It serves glide's requests over a pipe and injects them into
+//! whichever desktop has the input, the sign-in screen included. While no
+//! glide runs in the session (after a restart, say), it is the client
+//! itself ([`super::standby`]).
 
 use std::ptr::null_mut;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, Result};
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, LocalFree, HANDLE, INVALID_HANDLE_VALUE};
@@ -17,26 +19,25 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_TYPE_MESSAGE, PIPE_WAIT,
 };
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows_sys::Win32::System::StationsAndDesktops::{
-    CloseDesktop, GetUserObjectInformationW, OpenInputDesktop, SetThreadDesktop, HDESK, UOI_NAME,
-};
 use windows_sys::Win32::UI::WindowsAndMessaging::SetCursorPos;
 
-use super::{log, pipe_name, Reply, Request};
+use super::{follow_input_desktop, log, pipe_name, Reply, Request};
 
 /// Who may open the pipe: SYSTEM, and administrators, but only from a
 /// program running as administrator (high integrity, "no write up"): a
 /// normal program could otherwise answer UAC prompts by itself.
 const PIPE_SECURITY: &str = "D:P(A;;GA;;;SY)(A;;GRGW;;;BA)S:(ML;;NWNR;;;HI)";
-/// How often to look for the input moving to another desktop.
-const DESKTOP_CHECK: Duration = Duration::from_millis(50);
 
 pub fn run() -> Result<()> {
+    super::super::set_helper_mode();
     super::super::init_dpi(); // physical pixels, like glide
+    crate::logging::set_sink(log);
     let mut session = 0u32;
     unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
     log(&format!("helper started in session {session}"));
-    let mut desktop = InputDesktop::default();
+    std::thread::Builder::new()
+        .name("glide-standby".into())
+        .spawn(move || super::standby::run(session))?;
     loop {
         let pipe = match create_pipe(session) {
             Ok(p) => p,
@@ -48,7 +49,7 @@ pub fn run() -> Result<()> {
                 continue;
             }
         };
-        serve(pipe, &mut desktop);
+        serve(pipe);
         unsafe { CloseHandle(pipe) };
     }
 }
@@ -86,7 +87,7 @@ fn create_pipe(session: u32) -> Result<HANDLE> {
 }
 
 /// One glide connection, until it goes away.
-fn serve(pipe: HANDLE, desktop: &mut InputDesktop) {
+fn serve(pipe: HANDLE) {
     unsafe {
         // Returns false with ERROR_PIPE_CONNECTED if glide got in first.
         if ConnectNamedPipe(pipe, null_mut()) == 0 && GetLastError() != 535 {
@@ -100,7 +101,7 @@ fn serve(pipe: HANDLE, desktop: &mut InputDesktop) {
         if ok == 0 {
             break; // glide closed it, or sent something too big
         }
-        desktop.follow();
+        let on_default_desktop = follow_input_desktop();
         if let Some(request) = Request::decode(&buf[..n as usize]) {
             match request {
                 Request::Status => {}
@@ -111,7 +112,7 @@ fn serve(pipe: HANDLE, desktop: &mut InputDesktop) {
             }
         }
         let reply = Reply {
-            on_default_desktop: desktop.is_default,
+            on_default_desktop,
             cursor: super::super::desktop::cursor_pos().map(|p| (p.x, p.y)),
         }
         .encode();
@@ -125,69 +126,4 @@ fn serve(pipe: HANDLE, desktop: &mut InputDesktop) {
         FlushFileBuffers(pipe);
         DisconnectNamedPipe(pipe);
     }
-}
-
-/// Keeps this thread on the desktop that has the input, since input can
-/// only be sent to (and the cursor read on) the thread's own desktop.
-struct InputDesktop {
-    handle: HDESK,
-    is_default: bool,
-    checked: Option<Instant>,
-}
-
-impl Default for InputDesktop {
-    fn default() -> Self {
-        InputDesktop {
-            handle: null_mut(),
-            is_default: false,
-            checked: None,
-        }
-    }
-}
-
-impl InputDesktop {
-    fn follow(&mut self) {
-        if self.checked.is_some_and(|t| t.elapsed() < DESKTOP_CHECK) {
-            return;
-        }
-        self.checked = Some(Instant::now());
-        const GENERIC_ALL: u32 = 0x1000_0000;
-        unsafe {
-            let input = OpenInputDesktop(0, 0, GENERIC_ALL);
-            if input.is_null() {
-                return;
-            }
-            let name = desktop_name(input);
-            if !self.handle.is_null() && name == desktop_name(self.handle) {
-                CloseDesktop(input);
-                return;
-            }
-            if SetThreadDesktop(input) == 0 {
-                log(&format!("couldn't switch to the {name} desktop ({})", GetLastError()));
-                CloseDesktop(input);
-                return;
-            }
-            if !self.handle.is_null() {
-                CloseDesktop(self.handle);
-            }
-            self.handle = input;
-            self.is_default = name.eq_ignore_ascii_case("Default");
-        }
-    }
-}
-
-fn desktop_name(desk: HDESK) -> String {
-    let mut name = [0u16; 64];
-    let mut needed = 0u32;
-    unsafe {
-        GetUserObjectInformationW(
-            desk as HANDLE,
-            UOI_NAME,
-            name.as_mut_ptr().cast(),
-            (name.len() * 2) as u32,
-            &mut needed,
-        );
-    }
-    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-    String::from_utf16_lossy(&name[..len])
 }

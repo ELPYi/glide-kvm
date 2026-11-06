@@ -143,19 +143,28 @@ fn fetch_manifest(url: &str) -> Result<Manifest> {
     verify_manifest(&text, &String::from_utf8_lossy(&signature), RELEASE_KEY)
 }
 
-/// One file of this exact version's release, checked against its signed
-/// manifest (to get or refresh `glide-secure.exe` without a full update).
-pub fn verified_release_file(asset: &str) -> Result<Vec<u8>> {
+/// The signed manifest of the version that's running.
+pub fn this_release_manifest() -> Result<Manifest> {
     if !crate::is_release_build() {
         bail!("local builds don't download release files");
     }
-    let repo = crate::UPDATE_REPO;
-    let manifest = fetch_manifest(&asset_url(repo, crate::VERSION, MANIFEST))?;
+    let manifest = fetch_manifest(&asset_url(crate::UPDATE_REPO, crate::VERSION, MANIFEST))?;
     if manifest.version != crate::VERSION {
         bail!("release {} has the wrong manifest", crate::VERSION);
     }
+    Ok(manifest)
+}
+
+/// One file of this exact version's release, checked against its signed
+/// manifest: for the copies that run with more rights than you (admin
+/// mode's glide, the sign-in screen service), never taken from a folder any
+/// program could have changed.
+pub fn verified_release_file(asset: &str) -> Result<Vec<u8>> {
+    let repo = crate::UPDATE_REPO;
+    let manifest = this_release_manifest()?;
     let expected = match asset {
         SECURE_EXE => &manifest.secure_sha256,
+        APP_EXE if cfg!(windows) => &manifest.glide_sha256,
         _ => bail!("no checksum for {asset}"),
     };
     if expected.is_empty() {
@@ -398,22 +407,16 @@ fn check_and_download(u: &Updater, dir: &Path) -> Result<Option<String>> {
         let cli = crate::platform::http_get(&asset_url(repo, &manifest.version, CLI_ASSET))?;
         stage(&dir.join(CLI_EXE), &cli, cli_sha)?;
     }
-    if cfg!(windows) && !manifest.secure_sha256.is_empty() {
-        let secure = crate::platform::http_get(&asset_url(repo, &manifest.version, SECURE_EXE))?;
-        stage(&dir.join(SECURE_EXE), &secure, &manifest.secure_sha256)?;
-    }
     Ok(Some(manifest.version))
 }
 
 fn install_all(dir: &Path) -> Result<()> {
     install(&dir.join(APP_EXE))?;
-    for optional in [CLI_EXE, SECURE_EXE] {
-        let path = dir.join(optional);
-        if with_suffix(&path, ".new").exists() {
-            // Not the app itself: don't fail the update over it.
-            if let Err(e) = install(&path) {
-                log!("couldn't update {optional}: {e:#}");
-            }
+    let cli = dir.join(CLI_EXE);
+    if with_suffix(&cli, ".new").exists() {
+        // The command-line tool is optional: don't fail the update over it.
+        if let Err(e) = install(&cli) {
+            log!("couldn't update {CLI_EXE}: {e:#}");
         }
     }
     Ok(())

@@ -9,6 +9,12 @@ use std::sync::Mutex;
 const CAPACITY: usize = 500;
 
 static BUFFER: Mutex<VecDeque<LogLine>> = Mutex::new(VecDeque::new());
+/// Also send every line here (the sign-in screen helper has no window).
+static SINK: std::sync::OnceLock<fn(&str)> = std::sync::OnceLock::new();
+
+pub fn set_sink(sink: fn(&str)) {
+    let _ = SINK.set(sink);
+}
 
 #[derive(Clone, Debug)]
 pub struct LogLine {
@@ -32,6 +38,9 @@ pub fn push(text: String) {
         text,
     };
     eprintln!("[{}] {}", line.time, line.text);
+    if let Some(sink) = SINK.get() {
+        sink(&line.text);
+    }
     let mut buf = BUFFER.lock().unwrap_or_else(|e| e.into_inner());
     if buf.len() == CAPACITY {
         buf.pop_front();

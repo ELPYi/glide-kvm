@@ -4,6 +4,7 @@
 //! can be copied between machines.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -242,10 +243,27 @@ fn display_name(c: &ClientEntry, i: usize) -> String {
     }
 }
 
-/// `glide.toml` next to the running executable. On a Mac, in
-/// `~/Library/Application Support/glide` instead: the executable is inside
-/// the signed app, which must stay unchanged.
+static HOME: OnceLock<PathBuf> = OnceLock::new();
+
+/// Keep `glide.toml` in `dir` rather than next to the executable. The
+/// administrator copy runs from Program Files (which it can't use for your
+/// settings) and is pointed back at your own glide folder with `--home`.
+pub fn set_home(dir: PathBuf) {
+    let _ = HOME.set(dir);
+}
+
+/// The folder given with `--home`, if any.
+pub fn home_override() -> Option<&'static Path> {
+    HOME.get().map(PathBuf::as_path)
+}
+
+/// `glide.toml` next to the running executable (or in the `--home`
+/// folder). On a Mac, in `~/Library/Application Support/glide` instead: the
+/// executable is inside the signed app, which must stay unchanged.
 pub fn default_path() -> PathBuf {
+    if let Some(home) = HOME.get() {
+        return home.join(FILE_NAME);
+    }
     #[cfg(target_os = "macos")]
     if let Some(home) = std::env::var_os("HOME") {
         let dir = PathBuf::from(home).join("Library/Application Support/glide");

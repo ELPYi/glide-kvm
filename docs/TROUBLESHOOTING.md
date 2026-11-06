@@ -31,7 +31,9 @@
   Startup → Run glide as administrator** on that PC (and on the sharing PC,
   so its shortcuts keep working while an admin window is focused). It asks
   for permission once, then launches with admin rights without asking again.
-  The UAC prompt itself and the lock screen need the next setting.
+  (That copy runs from `C:\Program Files\glide`, where nothing without admin
+  rights can change it.) The UAC prompt itself and the lock screen need the
+  next setting.
 - **Can't type the PIN on the other PC's lock screen, or click its UAC
   prompts**: on that PC, turn on **Settings → Startup → Control this PC's
   sign-in screen from another PC** (it needs *Run glide as administrator*
@@ -40,7 +42,9 @@
   isn't needed for the Windows 11 lock screen: click or press any key). If
   it doesn't work, that PC's Logs tab says why ("sign-in screen: ..."), and
   `glide-cli signin-check`, run as administrator there, tests the link.
-  Signing in after a restart, before glide has started, isn't covered yet.
+  It also works after a restart, before anyone has signed in: the service
+  connects to the sharing PC by itself until glide starts. Its own log is
+  `C:\Program Files\glide\glide-secure.log`.
 - **Ctrl+Alt+Del** always goes to the PC you're physically at; Windows reserves it.
 - **Mac: sharing won't start, or the cursor doesn't move there**: glide needs
   the Accessibility permission. In System Settings, Privacy & Security,

@@ -189,6 +189,21 @@ itself), and glide checks the pipe's server runs as SYSTEM before sending
 anything (PINs go through it). The service runs from `C:\Program
 Files\glide`, always a copy checked against the signed release manifest.
 
+While the sign-in screen is up and no glide.exe runs in the session (just
+restarted, signed out), the helper is the client itself (`signin/standby.rs`): a client with no
+clipboard or sound, from `signin.toml` (what it needs of glide.toml, written
+by the elevated glide, readable only by SYSTEM and administrators). When
+glide.exe appears or the normal desktop is back it stops, freeing the UDP
+port within a second; glide's bind waits up to 3 s for it.
+
+**Admin mode runs from Program Files.** The admin task (which starts glide
+with full rights, no prompt) runs `C:\Program Files\glide\glide.exe
+--from-task --home <your glide folder>`, not the copy in your folder, which
+any program could replace to gain admin rights at the next start. That copy
+is the signed release's glide.exe (the running one in a local build),
+updates itself in place, and takes its settings from `--home`. Admin mode
+set up by older versions is moved over at the next elevated start.
+
 **Signed releases.** `latest.toml` lists every file's SHA-256 and is signed
 in CI with an Ed25519 key (`GLIDE_SIGNING_KEY`); the public half is built
 into glide (`update.rs`), which refuses a manifest whose signature doesn't

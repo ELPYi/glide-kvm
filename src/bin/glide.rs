@@ -17,6 +17,13 @@ use glide::platform::system;
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let has = |flag: &str| args.iter().any(|a| a == flag);
+    if let Some(home) = args
+        .iter()
+        .position(|a| a == system::HOME_ARG)
+        .and_then(|i| args.get(i + 1))
+    {
+        config::set_home(PathBuf::from(home));
+    }
 
     // Helper modes, run elevated by the app itself (one UAC prompt each).
     if has("--install-admin-task") {

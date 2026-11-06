@@ -61,6 +61,19 @@ pub use timing::precise_sleep;
 /// seen, letting it drive the hooks without your real mouse muddying results.
 static SELFTEST: AtomicBool = AtomicBool::new(false);
 
+/// This process is the sign-in screen helper (SYSTEM, see `signin`): it
+/// injects on whichever desktop has the input, and leaves the cursor and
+/// pointer settings alone (they're the signed-in user's).
+static HELPER: AtomicBool = AtomicBool::new(false);
+
+fn set_helper_mode() {
+    HELPER.store(true, Ordering::Relaxed);
+}
+
+fn helper_mode() -> bool {
+    HELPER.load(Ordering::Relaxed)
+}
+
 /// Should capture process an event with this injected flag?
 fn wanted(injected: bool) -> bool {
     injected == SELFTEST.load(Ordering::Relaxed)
