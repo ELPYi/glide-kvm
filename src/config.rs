@@ -102,6 +102,11 @@ pub struct SwitchSettings {
     /// Typing goes to the PC you last clicked on, not the one the cursor is
     /// on. Off = the keyboard goes wherever the mouse goes.
     pub keyboard_follows_click: bool,
+    /// On a jittery network (busy Wi-Fi), the other PC holds mouse movement
+    /// back a few milliseconds (at most one 60 Hz frame) and replays it at
+    /// the pace it was made, so the cursor glides instead of freezing and
+    /// jumping. On a steady link it holds nothing back.
+    pub smooth_motion: bool,
 }
 
 /// Choices offered for [`SwitchSettings::mouse_rate_hz`] (0 = automatic).
@@ -115,6 +120,7 @@ impl Default for SwitchSettings {
             match_pointer_feel: true,
             mouse_rate_hz: 0,
             keyboard_follows_click: true,
+            smooth_motion: true,
         }
     }
 }

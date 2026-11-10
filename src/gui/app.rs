@@ -833,6 +833,7 @@ mod tests {
             match_pointer_feel: false,
             mouse_rate_hz: 4000,
             keyboard_follows_click: false,
+            smooth_motion: false,
         };
         new.run_as_admin = true;
         new.start_on_open = !old.start_on_open;

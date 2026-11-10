@@ -86,6 +86,13 @@ records what would have been injected.
   no queue or thread hop. Mouse motion is fire-and-forget UDP, but each packet
   carries a running total (`MotionTally`), so the next one to arrive makes up
   for any a busy Wi-Fi dropped and the cursor never falls short of the hand.
+- **Smoothing** (`client/smooth.rs`, Settings → Switching, on by default):
+  motion packets carry the server's send time, and the client plays them out
+  at that pace behind a small adaptive delay (the 98th percentile of recent
+  lateness, capped at 16 ms; ~0 on a steady link). A busy Wi-Fi's
+  hold-then-burst no longer freezes and then jumps the cursor. Held motion
+  goes out before any key or click, and nothing is held while a game is in
+  focus on the controlled PC.
   Keys, buttons and wheel use a tiny ack/retransmit layer, so a lost packet
   can't leave a key stuck.
 - Measured end-to-end in software: ~10 µs at p50 (`cargo test latency -- --nocapture`).
@@ -314,8 +321,9 @@ packet = [magic 'G'][dir][session u64][counter u64]  ++  ChaCha20-Poly1305(messa
 - **Key**: `SHA-256("glide-v1" ‖ secret ‖ session)`. Each server run picks a
   new `session` (its start time in µs), so keys rotate per run.
 - **Replay protection**: a 64-packet sliding window over `counter`.
-- **Server → client**: `Heartbeat{sent_micros, wants_sound}`, `Motion{dx,dy,tally}` (unreliable;
-  the client moves by the tally's difference from the last one it saw),
+- **Server → client**: `Heartbeat{sent_micros, wants_sound}`, `Motion{dx,dy,tally,sent_micros}` (unreliable;
+  the client moves by the tally's difference from the last one it saw, and
+  smooths by `sent_micros` when present),
   `Reliable{seq, Enter{side, frac, feel, tally} | Leave | Input}`, `Clip`. The
   tallies are appended fields, so older versions read and send the old form.
 - **Client → server**: `Pong{instance, echo_micros}` (gives RTT),

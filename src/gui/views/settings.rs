@@ -385,6 +385,12 @@ fn switching(ui: &mut Ui, draft: &mut Config) {
     );
     field(
         ui,
+        "Smooth motion",
+        Some("On a busy Wi-Fi, the other PC holds the mouse movement back a few milliseconds (never more than 16) and replays it evenly, so the cursor glides instead of jumping. On a steady connection it adds no delay. Turn off for the least delay in fast games."),
+        |ui| ui.checkbox(&mut draft.switching.smooth_motion, "Smooth the cursor on a busy network"),
+    );
+    field(
+        ui,
         "Mouse update rate",
         Some("How often mouse movement is sent. Higher = less delay but more network traffic (can hurt on busy Wi-Fi). Automatic: 4000/s on a cable, 1000/s on Wi-Fi."),
         |ui| {

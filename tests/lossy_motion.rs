@@ -95,6 +95,7 @@ fn lost_motion_packets_are_made_up_for() {
                 dx: 3,
                 dy: -1,
                 tally: Some(tally),
+                sent_micros: None,
             });
         }
     }
@@ -103,6 +104,7 @@ fn lost_motion_packets_are_made_up_for() {
         dx: 3,
         dy: -1,
         tally: Some(sent[4]),
+        sent_micros: None,
     });
     wait_for("all the movement", || desk.motion_sum() == (30, -10));
     std::thread::sleep(Duration::from_millis(100));
@@ -126,6 +128,7 @@ fn movement_lost_before_the_switch_arrives_still_counts() {
         dx: 2,
         dy: 2,
         tally: Some(tally),
+        sent_micros: None,
     });
     wait_for("the whole movement", || desk.motion_sum() == (6, 6));
     client.stop();
@@ -141,8 +144,56 @@ fn an_older_server_still_moves_the_cursor() {
             dx: -1,
             dy: 5,
             tally: None,
+            sent_micros: None,
         });
     }
     wait_for("the movement", || desk.motion_sum() == (-4, 20));
+    client.stop();
+}
+
+#[test]
+fn smoothed_motion_all_arrives_and_lands_before_a_click() {
+    let (mut srv, client, desk) = setup();
+    let mut tally = MotionTally::default();
+    srv.enter(Some(tally));
+    wait_for("being controlled", || client.status().active);
+
+    // Stamped as sent a millisecond apart but all arriving at once (a burst):
+    // the client plays them out over time instead of in one jump.
+    for i in 0..200u32 {
+        tally.add(1, 0);
+        srv.send(&ServerMsg::Motion {
+            dx: 1,
+            dy: 0,
+            tally: Some(tally),
+            sent_micros: Some(i * 1000),
+        });
+    }
+    // A click right behind them: whatever is still held goes first.
+    srv.send(&ServerMsg::Reliable {
+        seq: 2,
+        ev: ReliableEv::Input(glide::input::InputEvent::Button {
+            button: glide::input::Button::Left,
+            down: true,
+        }),
+    });
+    wait_for("the click", || {
+        desk.events()
+            .iter()
+            .any(|e| matches!(e, glide::input::InputEvent::Button { .. }))
+    });
+    let events = desk.events();
+    let click = events
+        .iter()
+        .position(|e| matches!(e, glide::input::InputEvent::Button { .. }))
+        .unwrap();
+    let before: i32 = events[..click]
+        .iter()
+        .map(|e| match e {
+            glide::input::InputEvent::Motion { dx, .. } => *dx,
+            _ => 0,
+        })
+        .sum();
+    assert_eq!(before, 200, "all the movement, before the click");
     client.stop();
 }

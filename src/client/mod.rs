@@ -9,6 +9,11 @@
 //! wake-up catches up in one step instead of replaying a growing backlog
 //! move by move, which is what turns a hiccup into seconds of lag.
 //!
+//! **Smoothing.** On a jittery network, motion stamped with the server's
+//! send time is held back a little and played out at the pace it was made
+//! (see [`smooth`]). While some is held, the loop polls in short sleeps
+//! instead of blocking on the socket, so it can inject on time.
+//!
 //! This PC's sound is sent by a separate thread (`crate::audio::share`),
 //! through an [`AudioLink`]: the session details it needs, kept current by
 //! this thread. It never touches this loop.
@@ -38,7 +43,10 @@ use crate::net::crypto::{self, Cipher, ReplayWindow};
 use crate::net::protocol::{ClientMsg, MotionTally, ReliableEv, ServerMsg};
 use crate::net::reliable::Inbox;
 use crate::platform::{self, Desktop};
+
+mod smooth;
 use crate::status::ClientStatus;
+use smooth::Smoother;
 
 const SERVER_TIMEOUT: Duration = Duration::from_millis(1000);
 const KNOCK_EVERY: Duration = Duration::from_millis(500);
@@ -56,6 +64,9 @@ const GAME_CHECK_EVERY: Duration = Duration::from_millis(250);
 /// Heartbeats in a row (~100 ms) saying the server isn't controlling this PC,
 /// while it thinks it is, before letting go (one could be stale, reordered).
 const LET_GO_HEARTBEATS: u32 = 4;
+/// While motion is held back, the longest the loop sleeps between checks
+/// (also the most a newly arrived packet waits to be read).
+const SMOOTH_POLL: Duration = Duration::from_micros(500);
 
 pub struct ClientOptions {
     pub secret: String,
@@ -236,6 +247,10 @@ struct Client {
     /// The newest motion tally seen while being controlled (`None` from
     /// servers older than 0.4.27): see [`MotionTally`].
     motion_tally: Option<MotionTally>,
+    /// Motion held back to smooth over a jittery network.
+    smoother: Smoother,
+    /// Our clock for the smoother.
+    epoch: Instant,
     /// Latest "can't accept input" state, and when it was checked.
     block: Option<InputBlock>,
     block_checked: Option<Instant>,
@@ -285,6 +300,8 @@ impl Client {
             inbox: Inbox::new(INBOX_CAPACITY),
             pending_motion: (0, 0),
             motion_tally: None,
+            smoother: Smoother::default(),
+            epoch: Instant::now(),
             block: None,
             block_checked: None,
             active: false,
@@ -310,13 +327,22 @@ impl Client {
             // Sleeps until a packet arrives. (Polling instead would pick a
             // packet up ~20 µs sooner, which is lost in the network's
             // milliseconds, and burns a whole core while the mouse moves.)
-            match self.sock.recv_from(&mut buf) {
-                Ok((n, src)) => {
-                    self.handle_packet(&buf[..n], src);
-                    self.drain(&mut buf);
+            if let Some(due) = self.smoother.next_due() {
+                // Motion is waiting for its moment: don't block past it.
+                self.drain(&mut buf);
+                let wait = due - self.now_us();
+                if wait > 0 {
+                    platform::precise_sleep(Duration::from_micros(wait as u64).min(SMOOTH_POLL));
                 }
-                Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
-                Err(_) => {} // e.g. ICMP unreachable echoes on Windows
+            } else {
+                match self.sock.recv_from(&mut buf) {
+                    Ok((n, src)) => {
+                        self.handle_packet(&buf[..n], src);
+                        self.drain(&mut buf);
+                    }
+                    Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+                    Err(_) => {} // e.g. ICMP unreachable echoes on Windows
+                }
             }
             self.flush_motion();
             self.check_block();
@@ -451,6 +477,7 @@ impl Client {
     /// Back to idle: release everything and restore this PC's pointer settings.
     fn deactivate(&mut self) {
         self.pending_motion = (0, 0);
+        self.smoother.clear();
         self.release_all();
         if self.active {
             self.desktop.set_pointer_feel(None);
@@ -545,9 +572,17 @@ impl Client {
                     active: Some(self.active),
                 });
             }
-            ServerMsg::Motion { dx, dy, tally } => self.on_motion(dx, dy, tally),
+            ServerMsg::Motion {
+                dx,
+                dy,
+                tally,
+                sent_micros,
+            } => self.on_motion(dx, dy, tally, sent_micros),
             ServerMsg::Reliable { seq, ev } => {
-                // Motion first, so a click lands where the cursor actually is.
+                // Motion first (even any held back), so a click lands where
+                // the cursor actually is.
+                let held = self.smoother.take_all();
+                self.add_pending(held);
                 self.flush_motion();
                 for ev in self.inbox.accept(seq, ev) {
                     self.apply(ev);
@@ -597,9 +632,20 @@ impl Client {
         self.replay = ReplayWindow::default();
         self.inbox.reset();
         self.motion_tally = None;
+        // A new run of the server: a new clock to learn.
+        self.smoother = Smoother::default();
     }
 
-    fn on_motion(&mut self, dx: i32, dy: i32, tally: Option<MotionTally>) {
+    fn now_us(&self) -> i64 {
+        self.epoch.elapsed().as_micros() as i64
+    }
+
+    fn add_pending(&mut self, (dx, dy): (i32, i32)) {
+        self.pending_motion.0 = self.pending_motion.0.saturating_add(dx);
+        self.pending_motion.1 = self.pending_motion.1.saturating_add(dy);
+    }
+
+    fn on_motion(&mut self, dx: i32, dy: i32, tally: Option<MotionTally>, sent_micros: Option<u32>) {
         if !self.active {
             return;
         }
@@ -615,12 +661,20 @@ impl Client {
         if tally.is_some() {
             self.motion_tally = tally;
         }
-        self.pending_motion.0 = self.pending_motion.0.saturating_add(dx);
-        self.pending_motion.1 = self.pending_motion.1.saturating_add(dy);
+        match sent_micros {
+            // Mid-game, the least delay matters more than smoothness.
+            Some(at) if self.game.is_none() => {
+                let now = self.now_us();
+                self.smoother.push(at, now, dx, dy);
+            }
+            _ => self.add_pending((dx, dy)),
+        }
     }
 
     /// Inject the merged motion (or hand control back at the entry edge).
     fn flush_motion(&mut self) {
+        let due = self.smoother.take_due(self.now_us());
+        self.add_pending(due);
         let (dx, dy) = std::mem::take(&mut self.pending_motion);
         if !self.active || (dx == 0 && dy == 0) {
             return;
@@ -652,6 +706,7 @@ impl Client {
                 // This visit's movement counts from here, so nothing lost
                 // before it (or since, before this arrived) goes missing.
                 self.motion_tally = tally;
+                self.smoother.clear();
                 // Feel exactly like the sharing PC's mouse (or keep our own).
                 self.desktop.set_pointer_feel(feel);
                 self.desktop.warp_to_edge(side, frac);

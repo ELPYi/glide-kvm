@@ -112,6 +112,8 @@ pub struct Server {
     desktop: Arc<dyn Desktop>,
     running: AtomicBool,
     threads: Mutex<Vec<JoinHandle<()>>>,
+    /// Start of this run: the clock motion packets are stamped with.
+    epoch: Instant,
 }
 
 impl Server {
@@ -148,6 +150,7 @@ impl Server {
             desktop,
             running: AtomicBool::new(true),
             threads: Mutex::new(Vec::new()),
+            epoch: Instant::now(),
         });
 
         let spawn = |name: &str, f: fn(&Server)| {
@@ -475,13 +478,24 @@ impl Server {
         let Some((dx, dy)) = st.motion.take(now) else {
             return;
         };
+        let smooth = st.switcher.settings().smooth_motion;
         let Some(p) = st.switcher.active().and_then(|i| st.peers.get_mut(i)) else {
             return;
         };
         if let Some(addr) = p.addr {
             p.motion.add(dx, dy);
             let tally = Some(p.motion);
-            self.send(addr, &ServerMsg::Motion { dx, dy, tally });
+            // Truncated: the client only compares times close together.
+            let sent_micros = smooth.then(|| self.epoch.elapsed().as_micros() as u32);
+            self.send(
+                addr,
+                &ServerMsg::Motion {
+                    dx,
+                    dy,
+                    tally,
+                    sent_micros,
+                },
+            );
         }
     }
 

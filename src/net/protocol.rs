@@ -26,10 +26,14 @@ pub enum ServerMsg {
     },
     /// Unreliable, but `tally` (appended in 0.4.27; `None` from older
     /// servers) lets the client make up for lost packets: see [`MotionTally`].
+    /// `sent_micros`: when it was sent, on the server's own clock (wrapping;
+    /// appended in 0.4.28, and only with a tally). Present when the server
+    /// wants the client to smooth motion (see `client::smooth`).
     Motion {
         dx: i32,
         dy: i32,
         tally: Option<MotionTally>,
+        sent_micros: Option<u32>,
     },
     /// Delivered in order, acked and retransmitted (see [`super::reliable`]).
     Reliable { seq: u32, ev: ReliableEv },
@@ -307,9 +311,17 @@ impl ServerMsg {
                     w.u8(*c as u8);
                 }
             }
-            ServerMsg::Motion { dx, dy, tally } => {
+            ServerMsg::Motion {
+                dx,
+                dy,
+                tally,
+                sent_micros,
+            } => {
                 w.u8(0x02).i32(*dx).i32(*dy);
                 write_tally(&mut w, tally);
+                if let (Some(_), Some(at)) = (tally, sent_micros) {
+                    w.u32(*at);
+                }
             }
             ServerMsg::Reliable { seq, ev } => {
                 w.u8(0x03).u32(*seq);
@@ -355,11 +367,17 @@ impl ServerMsg {
                 wants_sound: r.u8().is_some_and(|b| b != 0),
                 controlling: r.u8().map(|b| b != 0),
             },
-            0x02 => ServerMsg::Motion {
-                dx: r.i32()?,
-                dy: r.i32()?,
-                tally: read_tally(&mut r),
-            },
+            0x02 => {
+                let (dx, dy) = (r.i32()?, r.i32()?);
+                let tally = read_tally(&mut r);
+                let sent_micros = tally.and_then(|_| r.u32());
+                ServerMsg::Motion {
+                    dx,
+                    dy,
+                    tally,
+                    sent_micros,
+                }
+            }
             0x03 => {
                 let seq = r.u32()?;
                 let ev = match r.u8()? {
@@ -479,6 +497,7 @@ mod tests {
                 dx: -5,
                 dy: 1200,
                 tally: None,
+                sent_micros: None,
             },
             ServerMsg::Motion {
                 dx: 3,
@@ -488,6 +507,13 @@ mod tests {
                     x: i32::MIN,
                     y: 77,
                 }),
+                sent_micros: None,
+            },
+            ServerMsg::Motion {
+                dx: 1,
+                dy: 0,
+                tally: Some(MotionTally { packets: 2, x: 1, y: 0 }),
+                sent_micros: Some(u32::MAX),
             },
             ServerMsg::Reliable {
                 seq: 7,
@@ -569,19 +595,30 @@ mod tests {
                 x: 10,
                 y: 5,
             }),
+            sent_micros: Some(99),
         }
         .encode();
         // An older client reads just the movement, and ignores the rest.
         assert_eq!(&new[..9], &[0x02, 4, 0, 0, 0, 0xfe, 0xff, 0xff, 0xff][..]);
-        // An older server's packet reads as having no tally.
+        // An older server's packet reads as having no tally (or time).
         assert_eq!(
             ServerMsg::decode(&new[..9]),
             Some(ServerMsg::Motion {
                 dx: 4,
                 dy: -2,
-                tally: None
+                tally: None,
+                sent_micros: None,
             })
         );
+        // A 0.4.27 server's: a tally, but no time.
+        assert!(matches!(
+            ServerMsg::decode(&new[..21]),
+            Some(ServerMsg::Motion {
+                tally: Some(_),
+                sent_micros: None,
+                ..
+            })
+        ));
     }
 
     #[test]
