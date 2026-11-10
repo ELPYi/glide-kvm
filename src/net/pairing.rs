@@ -381,11 +381,12 @@ mod tests {
             loop {
                 let (n, src) = sock.recv_from(&mut buf).unwrap();
                 let step = p.lock().unwrap().handle(&buf[..n], src, Instant::now());
-                if let Some(r) = step.reply {
-                    sock.send_to(&r, src).unwrap();
-                }
+                // Noted before replying: the test checks it once the reply lands.
                 if let Some(name) = step.paired {
                     names.lock().unwrap().push(name);
+                }
+                if let Some(r) = step.reply {
+                    sock.send_to(&r, src).unwrap();
                 }
             }
         });
