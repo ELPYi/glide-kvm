@@ -39,10 +39,18 @@ fn main() -> eframe::Result {
         std::process::exit(exit_code(system::remove_signin()));
     }
 
+    let from_task = has(system::FROM_TASK_ARG);
+    // Started by the administrator task for a glide folder that's gone
+    // (glide was deleted or moved): the task is left over. Remove it rather
+    // than start without settings, in the way of the copy you're using now.
+    if from_task && config::home_override().is_some_and(|home| !home.is_dir()) {
+        let _ = system::remove_admin_task();
+        return Ok(());
+    }
+
     // Already running (maybe hidden in the tray)? Bring it forward instead.
     // A copy started by the admin task waits a moment: the copy that
     // launched it may still be closing.
-    let from_task = has(system::FROM_TASK_ARG);
     let after_update = has(glide::update::AFTER_UPDATE_ARG);
     let wait = if after_update {
         Duration::from_secs(15) // the old version is still shutting down
