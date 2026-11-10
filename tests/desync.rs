@@ -75,6 +75,7 @@ fn takes_control_back_when_the_other_pc_let_go() {
             address: format!("127.0.0.1:{client_port}"),
             side: Side::Right,
             muted: false,
+            pc: None,
         }],
         switching: classic(),
         ..Config::new_default_with_secret(SECRET)

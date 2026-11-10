@@ -38,7 +38,7 @@ use crate::clip::sync::{ClipInbox, ClipMsg, ClipNet};
 use crate::game::{self, GameSettings};
 use crate::input::{Button, InputBlock, InputEvent, Side};
 use crate::log;
-use crate::net::addr::resolve;
+use crate::net::addr::{machine_name, resolve};
 use crate::net::crypto::{self, Cipher, ReplayWindow};
 use crate::net::protocol::{ClientMsg, MotionTally, ReliableEv, ServerMsg};
 use crate::net::reliable::Inbox;
@@ -238,6 +238,9 @@ struct Client {
     last_rx: Option<Instant>,
 
     knock_target: Option<SocketAddr>,
+    /// Sent with each knock, so the server still knows this PC after its
+    /// address changes (the name it was paired under).
+    name: String,
     last_resolve: Option<Instant>,
     last_knock: Option<Instant>,
 
@@ -295,6 +298,7 @@ impl Client {
             server: None,
             last_rx: None,
             knock_target: None,
+            name: machine_name(),
             last_resolve: None,
             last_knock: None,
             inbox: Inbox::new(INBOX_CAPACITY),
@@ -498,11 +502,14 @@ impl Client {
         let Some(address) = self.opts.server_address.as_deref().filter(|a| !a.trim().is_empty()) else {
             return;
         };
-        if self.knock_target.is_none() && self.last_resolve.is_none_or(|t| t.elapsed() >= RESOLVE_EVERY) {
+        // Look it up again now and then: a name's address can change
+        // (DHCP, another network) while we're out of touch.
+        if self.last_resolve.is_none_or(|t| t.elapsed() >= RESOLVE_EVERY) {
             self.last_resolve = Some(Instant::now());
-            self.knock_target = resolve(address, self.opts.server_port);
-            if self.knock_target.is_none() {
-                log!("couldn't find the server at {address}");
+            match resolve(address, self.opts.server_port) {
+                Some(target) => self.knock_target = Some(target),
+                None if self.knock_target.is_none() => log!("couldn't find the server at {address}"),
+                None => {}
             }
         }
         let Some(target) = self.knock_target else { return };
@@ -513,7 +520,10 @@ impl Client {
                 crypto::DIR_TO_SERVER,
                 crypto::KNOCK_SESSION,
                 self.next_counter(),
-                &ClientMsg::Knock.encode(),
+                &ClientMsg::Knock {
+                    name: Some(self.name.clone()),
+                }
+                .encode(),
             );
             let _ = self.sock.send_to(&pkt, target);
         }

@@ -185,16 +185,21 @@ fn device_card(
                 ui.add_space(8.0);
                 status_tag(ui, "Sound", Tone::Muted);
             }
+            let confirming = local.removing == Some(i);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Remove").on_hover_text("Forget this PC").clicked() {
-                    local.removing = Some(i);
-                    local.renaming = None;
+                // While "Remove …?" is asked below, its buttons are the only
+                // Remove on the card.
+                if !confirming {
+                    if ui.small_button("Remove").on_hover_text("Forget this PC").clicked() {
+                        local.removing = Some(i);
+                        local.renaming = None;
+                    }
+                    if ui.small_button("Rename").clicked() {
+                        local.renaming = Some((i, p.name.clone()));
+                        local.removing = None;
+                    }
+                    ui.add_space(6.0);
                 }
-                if ui.small_button("Rename").clicked() {
-                    local.renaming = Some((i, p.name.clone()));
-                    local.removing = None;
-                }
-                ui.add_space(6.0);
                 // Only offered while its sound would play here at all.
                 if m.saved.audio.play {
                     let (label, tip) = if p.muted {
@@ -218,8 +223,11 @@ fn device_card(
         });
         if local.removing == Some(i) {
             ui.horizontal(|ui| {
-                ui.label(format!("Remove {}? To use it again, pair it again.", p.name));
-                if ui.button("Remove").clicked() {
+                ui.label(format!("Forget {}? To use it again, pair it again.", p.name));
+                if ui
+                    .button(RichText::new("Yes, remove").color(theme::tone_color(Tone::Bad)))
+                    .clicked()
+                {
                     actions.push(Action::RemoveDevice { index: i });
                     local.removing = None;
                 }

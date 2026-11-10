@@ -17,6 +17,12 @@ pub fn resolve(address: &str, default_port: u16) -> Option<SocketAddr> {
     addrs.iter().find(|a| a.is_ipv4()).or(addrs.first()).copied()
 }
 
+/// "1.2.3.4" or "1.2.3.4:port", as opposed to a name that's looked up.
+pub fn is_ip_address(address: &str) -> bool {
+    let a = address.trim();
+    a.parse::<IpAddr>().is_ok() || a.parse::<SocketAddr>().is_ok()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AddrKind {
     /// Home/office network: the one to type on another PC.

@@ -149,8 +149,10 @@ pub enum ClientMsg {
     EdgeLeave { side: Side, frac: f32 },
     /// "I'm here." Sent by a client that knows the server's address before any
     /// session exists. Outbound traffic makes the client's own firewall accept
-    /// the server's replies, so no inbound rule is needed.
-    Knock,
+    /// the server's replies, so no inbound rule is needed. `name` is this
+    /// PC's name (appended in 0.4.32; `None` from older clients): when this
+    /// PC's address has changed, the server finds it by name.
+    Knock { name: Option<String> },
     /// 10 ms of this PC's sound, Opus-compressed (see `crate::audio`).
     /// `stream` changes when the client restarts; `seq` counts frames.
     Audio { stream: u32, seq: u32, opus: Vec<u8> },
@@ -430,8 +432,11 @@ impl ClientMsg {
             ClientMsg::EdgeLeave { side, frac } => {
                 w.u8(0x23).u8(side.to_u8()).f32(*frac);
             }
-            ClientMsg::Knock => {
+            ClientMsg::Knock { name } => {
                 w.u8(0x24);
+                if let Some(n) = name {
+                    w.0.extend_from_slice(n.as_bytes());
+                }
             }
             ClientMsg::Audio { stream, seq, opus } => {
                 w.u8(0x25).u32(*stream).u32(*seq);
@@ -459,7 +464,9 @@ impl ClientMsg {
                 side: r.side()?,
                 frac: r.f32()?,
             },
-            0x24 => ClientMsg::Knock,
+            0x24 => ClientMsg::Knock {
+                name: Some(String::from_utf8_lossy(r.0).into_owned()).filter(|n| !n.is_empty()),
+            },
             0x25 => ClientMsg::Audio {
                 stream: r.u32()?,
                 seq: r.u32()?,
@@ -669,7 +676,10 @@ mod tests {
                 side: Side::Bottom,
                 frac: 0.5,
             },
-            ClientMsg::Knock,
+            ClientMsg::Knock { name: None },
+            ClientMsg::Knock {
+                name: Some("WORK-LAPTOP".into()),
+            },
             ClientMsg::Audio {
                 stream: 77,
                 seq: 4_000_000_000,

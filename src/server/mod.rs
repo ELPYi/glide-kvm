@@ -35,7 +35,7 @@ use crate::game::{self, GameSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
 use crate::input::Side;
 use crate::log;
-use crate::net::addr::resolve;
+use crate::net::addr::{self, resolve};
 use crate::net::crypto::{self, Cipher};
 use crate::net::pairing::{self, ServerPairing};
 use crate::net::protocol::{ClientMsg, Notice, ReliableEv, ServerMsg};
@@ -100,6 +100,9 @@ pub struct Server {
     pairing: Mutex<Option<PairingSession>>,
     /// Devices added by pairing, waiting for the app to save them.
     newly_paired: Mutex<Vec<ClientEntry>>,
+    /// Devices found at a new address (or that told us their PC name),
+    /// waiting for the app to save: (address saved before, updated entry).
+    moved: Mutex<Vec<(String, ClientEntry)>>,
     /// Result of "record a shortcut", waiting for the app (None inside = cancelled).
     recorded_hotkey: Mutex<Option<Option<Hotkey>>>,
     /// Shared with capture: while set, mouse motion is swallowed locally.
@@ -142,6 +145,7 @@ impl Server {
             pacer_wake: Condvar::new(),
             pairing: Mutex::new(None),
             newly_paired: Mutex::new(Vec::new()),
+            moved: Mutex::new(Vec::new()),
             recorded_hotkey: Mutex::new(None),
             grab: Arc::new(AtomicBool::new(false)),
             games: Mutex::new(cfg.games.clone()),
@@ -360,6 +364,40 @@ impl Server {
         std::mem::take(&mut *self.newly_paired.lock().unwrap())
     }
 
+    /// Devices whose saved address or PC name changed since the last call.
+    pub fn take_moved(&self) -> Vec<(String, ClientEntry)> {
+        std::mem::take(&mut *self.moved.lock().unwrap())
+    }
+
+    /// Update device `i`'s saved address (to `src`, if it was saved as an IP
+    /// address; a name is kept and looked up again) and PC name, and queue
+    /// the change for the app to save.
+    fn record_moved(&self, st: &mut State, i: usize, src: SocketAddr, pc: Option<&str>) {
+        let entry = &mut st.peers[i].entry;
+        let old = entry.clone();
+        if addr::is_ip_address(&entry.address) {
+            entry.address = self.address_of(src);
+        }
+        if let Some(pc) = pc.filter(|n| !n.trim().is_empty()) {
+            entry.pc = Some(pc.trim().to_string());
+        }
+        if *entry != old {
+            if entry.address != old.address {
+                log!("{} moved to {}", entry.name, entry.address);
+            }
+            self.moved.lock().unwrap().push((old.address, entry.clone()));
+        }
+    }
+
+    /// How a client at `src` is saved: its IP, plus the port if it isn't ours.
+    fn address_of(&self, src: SocketAddr) -> String {
+        if src.port() == self.client_port {
+            src.ip().to_string()
+        } else {
+            src.to_string()
+        }
+    }
+
     fn handle_pairing(&self, pkt: &[u8], src: SocketAddr) {
         let step = {
             let mut guard = self.pairing.lock().unwrap();
@@ -375,26 +413,25 @@ impl Server {
         }
     }
 
-    /// A PC proved it knew the code: add it (or refresh it if it's re-pairing).
+    /// A PC proved it knew the code: add it (or refresh it if it's re-pairing,
+    /// even from a new address).
     fn add_paired(&self, name: String, src: SocketAddr) {
         let mut st = self.lock();
-        if let Some(p) = st.peers.iter_mut().find(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) {
-            p.addr = Some(src);
-            log!("{} paired again", p.entry.name);
+        let known = st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip()));
+        if let Some(i) = known.or_else(|| st.peers.iter().position(|p| p.entry.is_pc(&name))) {
+            st.peers[i].addr = Some(src);
+            log!("{} paired again", st.peers[i].entry.name);
+            self.record_moved(&mut st, i, src, Some(&name));
             return;
         }
         let Some(side) = free_side(&st.peers) else {
             log!("{name} paired, but every side is taken");
             return;
         };
-        let address = if src.port() == self.client_port {
-            src.ip().to_string()
-        } else {
-            src.to_string()
-        };
         let entry = ClientEntry {
+            pc: Some(name.clone()),
             name,
-            address,
+            address: self.address_of(src),
             side,
             muted: false,
         };
@@ -687,20 +724,43 @@ impl Server {
                     self.apply_switch(&mut st, switch);
                 }
             }
-            ClientMsg::Knock | ClientMsg::Audio { .. } | ClientMsg::Clip(_) => {}
+            ClientMsg::Knock { .. } | ClientMsg::Audio { .. } | ClientMsg::Clip(_) => {}
         }
     }
 
     /// A client saying hello before it knows our session. Answer at once
     /// (no waiting for the next heartbeat) to the address it came from.
+    ///
+    /// A knock from an address we don't know is a paired PC that moved (new
+    /// DHCP lease, another network) if it gives the PC name of a device
+    /// that's offline: follow it there, no pairing again.
     fn handle_knock(&self, h: &crypto::Header, pkt: &[u8], src: SocketAddr) {
-        if crypto::open(&self.knock_cipher, h, pkt).is_none() {
+        let Some(plain) = crypto::open(&self.knock_cipher, h, pkt) else {
             return;
-        }
+        };
+        let pc = match ClientMsg::decode(&plain) {
+            Some(ClientMsg::Knock { name }) => name,
+            _ => None,
+        };
         let wants_sound = self.wants_sound();
         let mut st = self.lock();
-        let Some(i) = st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) else {
-            return;
+        let i = match st.peers.iter().position(|p| p.addr.is_some_and(|a| a.ip() == src.ip())) {
+            Some(i) => {
+                // Learn the PC name of a device paired before it was sent.
+                if st.peers[i].entry.pc.is_none() {
+                    self.record_moved(&mut st, i, src, pc.as_deref());
+                }
+                i
+            }
+            None => {
+                let Some(pc) = pc.as_deref() else { return };
+                let Some(i) = st.peers.iter().position(|p| !p.alive() && p.entry.is_pc(pc)) else {
+                    return;
+                };
+                log!("{} is at a new address ({src})", st.peers[i].entry.name);
+                self.record_moved(&mut st, i, src, Some(pc));
+                i
+            }
         };
         let controlling = st.switcher.active() == Some(i);
         let p = &mut st.peers[i];

@@ -88,6 +88,7 @@ fn refuses_when_every_side_is_taken() {
             address: "192.0.2.1".into(),
             side: *s,
             muted: false,
+            pc: None,
         })
         .collect();
     let (server, _) = empty_server(full);

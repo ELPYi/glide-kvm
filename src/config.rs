@@ -136,6 +136,21 @@ pub struct ClientEntry {
     /// Its sound isn't played here (muted from the Devices tab).
     #[serde(default, skip_serializing_if = "is_false")]
     pub muted: bool,
+    /// The name the PC itself goes by, recorded when it paired (or the first
+    /// time it says hello with it). `name` is yours to rename; this stays,
+    /// so the PC is still recognised after its address changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pc: Option<String>,
+}
+
+impl ClientEntry {
+    /// Whether this is the PC that calls itself `pc_name`.
+    pub fn is_pc(&self, pc_name: &str) -> bool {
+        self.pc
+            .as_deref()
+            .unwrap_or(&self.name)
+            .eq_ignore_ascii_case(pc_name.trim())
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -305,6 +320,7 @@ mod tests {
             address: "10.0.0.2".into(),
             side,
             muted: false,
+            pc: None,
         }
     }
 
@@ -339,6 +355,7 @@ mod tests {
                 address: "192.168.1.18".into(),
                 side: Side::Right,
                 muted: false,
+                pc: None,
             }]
         );
     }

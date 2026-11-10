@@ -29,6 +29,7 @@ fn connects_and_hands_the_port_back() {
             address: format!("127.0.0.1:{client_port}"),
             side: Side::Right,
             muted: false,
+            pc: None,
         }],
         ..Config::new_default_with_secret(SECRET)
     };

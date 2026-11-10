@@ -166,6 +166,7 @@ mod tests {
             address: "x".into(),
             side: Side::Left,
             muted: false,
+            pc: None,
         })
     }
 

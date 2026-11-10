@@ -327,7 +327,7 @@ packet = [magic 'G'][dir][session u64][counter u64]  ++  ChaCha20-Poly1305(messa
   `Reliable{seq, Enter{side, frac, feel, tally} | Leave | Input}`, `Clip`. The
   tallies are appended fields, so older versions read and send the old form.
 - **Client → server**: `Pong{instance, echo_micros}` (gives RTT),
-  `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock`, `Audio{stream, seq, opus}`, `Clip`.
+  `Ack{seq}` (cumulative), `EdgeLeave{side, frac}`, `Knock{name}`, `Audio{stream, seq, opus}`, `Clip`.
 - **Clipboard** (`Clip`, both ways): `Chunk{id, index, total, data}` (≤1100 bytes of the
   deflated clipboard) and `Ack{id, next}` (every chunk below `next` arrived). Paced at ~4 chunks
   per ms so mouse packets never queue behind a burst. Older builds ignore the unknown tag.
@@ -335,6 +335,12 @@ packet = [magic 'G'][dir][session u64][counter u64]  ++  ChaCha20-Poly1305(messa
   (sealed with session 0) every 500 ms until connected. Its firewall then
   treats the server's packets as replies, so **no inbound rule is needed**.
   The server answers a valid knock immediately.
+- **Moved PCs**: the knock carries the client's PC name (appended; `None` from
+  older clients). A knock from an unknown address whose name matches an
+  offline device's `pc` (recorded at pairing) is that device at a new address
+  (DHCP, another network): the server follows it there and the app saves the
+  new address, so it reconnects without pairing again. Re-pairing from a new
+  address refreshes the device instead of adding a second one.
 - **Restarts**: the client's `instance` id changes per run; the server resets
   that peer's sequence numbers when it sees a new one.
 
@@ -410,7 +416,7 @@ glide-cli selftest          # real OS hooks on this machine (freezes mouse ~1 s)
 | Integration | `tests/end_to_end.rs` | real server + client over UDP with mock desktops: crossing, latency, drag-block, lock, hotkeys, restarts, wrong secret |
 | | `tests/snappy.rs` | 8 kHz mouse merged without loss; slow receiver doesn't lag; pointer feel mirrored + restored; live layout changes |
 | | `tests/pairing.rs` | pair via code through a running server, then connect; wrong code; refusal when full |
-| | `tests/firewall_knock.rs` | knock answered at once; forged knock ignored; ports released |
+| | `tests/firewall_knock.rs` | knock answered at once; forged knock ignored; a moved PC found by name, a stranger not; ports released |
 | On-device | `glide-cli selftest` | edge detection on your monitors; hooks block input while raw motion still arrives |
 
 The GUI is checked by hand (it's a thin layer); its logic, `needs_restart`

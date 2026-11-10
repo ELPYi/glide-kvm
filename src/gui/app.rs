@@ -551,6 +551,16 @@ impl App {
             }
             self.save();
         }
+        // Devices found at a new address: remember it, so they reconnect
+        // there next time too. (Sharing already uses it; no restart.)
+        let moved = self.engine.with(Engine::take_moved).unwrap_or_default();
+        if !moved.is_empty() {
+            for (old, entry) in &moved {
+                apply_moved(&mut self.saved.clients, old, entry);
+                apply_moved(&mut self.draft.clients, old, entry);
+            }
+            self.save();
+        }
         if self.this_pc_read.elapsed() > ADDRESS_REFRESH {
             self.this_pc = read_this_pc();
             self.this_pc_read = Instant::now();
@@ -775,6 +785,15 @@ pub fn merge_paired(clients: &mut Vec<ClientEntry>, entry: ClientEntry) -> bool 
     true
 }
 
+/// The device saved at address `old` is `moved` now: take its new address
+/// and PC name (your name for it, its side and mute stay).
+pub fn apply_moved(clients: &mut [ClientEntry], old: &str, moved: &ClientEntry) {
+    if let Some(c) = clients.iter_mut().find(|c| c.address == old) {
+        c.address = moved.address.clone();
+        c.pc = moved.pc.clone();
+    }
+}
+
 /// Whether going from `old` to `new` requires restarting the engine, as
 /// opposed to applying live (switching settings, sides) or not affecting it.
 pub fn needs_restart(old: &Config, new: &Config) -> bool {
@@ -795,6 +814,7 @@ pub fn needs_restart(old: &Config, new: &Config) -> bool {
         for e in &mut c.clients {
             e.side = Side::Left;
             e.muted = false;
+            e.pc = None;
         }
         c
     };
@@ -812,6 +832,7 @@ mod tests {
             address: format!("10.0.0.{}", name.len()),
             side,
             muted: false,
+            pc: None,
         }
     }
 
@@ -882,6 +903,23 @@ mod tests {
         assert!(!merge_paired(&mut c, entry("a", Side::Left)), "same address = re-pair");
         assert!(merge_paired(&mut c, entry("bb", Side::Left)));
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn a_moved_device_keeps_its_name_and_side() {
+        let mut c = vec![entry("a", Side::Right), entry("bb", Side::Left)];
+        c[0].name = "Laptop".into();
+        let moved = ClientEntry {
+            address: "10.0.0.9".into(),
+            pc: Some("WORK-LAPTOP".into()),
+            ..entry("ignored", Side::Top)
+        };
+        apply_moved(&mut c, "10.0.0.1", &moved);
+        assert_eq!(c[0].name, "Laptop");
+        assert_eq!(c[0].side, Side::Right);
+        assert_eq!(c[0].address, "10.0.0.9");
+        assert_eq!(c[0].pc.as_deref(), Some("WORK-LAPTOP"));
+        assert_eq!(c[1], entry("bb", Side::Left), "others untouched");
     }
 
     #[test]

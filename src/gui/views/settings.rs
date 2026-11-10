@@ -184,6 +184,7 @@ fn devices(ui: &mut Ui, draft: &mut Config) {
                 address: String::new(),
                 side,
                 muted: false,
+                pc: None,
             });
         }
     }

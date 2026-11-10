@@ -257,6 +257,13 @@ impl Engine {
         }
     }
 
+    pub fn take_moved(&self) -> Vec<(String, ClientEntry)> {
+        match &self.inner {
+            Inner::Server { server, .. } => server.take_moved(),
+            _ => Vec::new(),
+        }
+    }
+
     pub fn stop(mut self) {
         self.shutdown();
     }
