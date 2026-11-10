@@ -94,10 +94,13 @@ impl Desktop for MockDesktop {
 
 /// The keyboard goes wherever the mouse goes, so a test can cross and type
 /// without clicking first. (The default, keyboard-follows-click, has its own
-/// test in `end_to_end.rs`.)
+/// test in `end_to_end.rs`.) No smoothing either: on a busy test machine it
+/// would rightly hold motion back, and these tests time glide's own path
+/// (smoothing has its own tests, in `lossy_motion.rs` and `client/smooth.rs`).
 pub fn classic() -> SwitchSettings {
     SwitchSettings {
         keyboard_follows_click: false,
+        smooth_motion: false,
         ..SwitchSettings::default()
     }
 }
