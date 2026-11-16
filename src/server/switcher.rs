@@ -21,9 +21,11 @@ use crate::platform::{Captured, EdgeHit};
 /// A pause in edge pushing longer than this restarts the edge-delay timer.
 const PUSH_GAP: Duration = Duration::from_millis(100);
 const KEY_ESC: u16 = 1;
-/// A held key repeats (Windows: at least every ~1 s, counting the delay
-/// before repeating starts). One unseen for this long isn't held any more:
-/// its release went missing.
+/// The key pressed last repeats while held (Windows: at least every ~1 s,
+/// counting the delay before repeating starts). Silent this long, it isn't
+/// held any more: its release went missing. Only that key: pressing
+/// another stops the first one repeating although it's still held
+/// (Shift + arrows), so an earlier key's silence says nothing.
 const STALE_KEY: Duration = Duration::from_secs(2);
 
 /// What the server should do with one captured event.
@@ -96,6 +98,8 @@ pub struct Switcher {
     key_dest: HashMap<u16, Option<usize>>,
     /// When each held key last went down or repeated.
     key_seen: HashMap<u16, Instant>,
+    /// The key pressed last, while held: the one that repeats.
+    last_pressed: Option<u16>,
     /// Held keys pressed on this PC by glide (a modifier moved here by a
     /// click), not by the keyboard: glide must release them here too.
     pressed_here: HashSet<u16>,
@@ -123,6 +127,7 @@ impl Switcher {
             keyboard: None,
             key_dest: HashMap::new(),
             key_seen: HashMap::new(),
+            last_pressed: None,
             pressed_here: HashSet::new(),
             keys_repeat: false,
             held_buttons_at_grab: HashSet::new(),
@@ -158,22 +163,37 @@ impl Switcher {
         self.keys_repeat = on;
     }
 
-    /// Keys that look held but stopped repeating: their release went
-    /// missing (the hook was paused, a secure screen took it). Forget them,
-    /// and release them wherever glide pressed them, or Shift stays down
+    /// Whether `code` must be repeating if it's held (see [`STALE_KEY`]),
+    /// and when it last did.
+    fn should_repeat(&self, code: u16) -> Option<Instant> {
+        if !self.keys_repeat || self.last_pressed != Some(code) {
+            return None;
+        }
+        self.key_seen.get(&code).copied()
+    }
+
+    /// Whether `code` is certainly still held: the key that should be
+    /// repeating, and is. (Without repeats to go by, trust what we saw.)
+    fn surely_held(&self, code: u16, now: Instant) -> bool {
+        if !self.keys_repeat {
+            return true;
+        }
+        self.should_repeat(code)
+            .is_some_and(|t| now.saturating_duration_since(t) < STALE_KEY)
+    }
+
+    /// The last key pressed looks held but stopped repeating: its release
+    /// went missing (the hook was paused, a secure screen took it). Forget
+    /// it, and release it wherever glide pressed it, or Shift stays down
     /// there for good. Returns the releases to send (`None` = this PC).
     pub fn release_stale(&mut self, now: Instant) -> Vec<(Option<usize>, InputEvent)> {
-        if !self.keys_repeat {
-            return Vec::new();
-        }
-        let stale: Vec<u16> = self
-            .key_seen
-            .iter()
-            .filter(|(_, &t)| now.saturating_duration_since(t) >= STALE_KEY)
-            .map(|(&code, _)| code)
-            .collect();
+        let stale = self.last_pressed.filter(|&code| {
+            self.should_repeat(code)
+                .is_some_and(|t| now.saturating_duration_since(t) >= STALE_KEY)
+        });
         let mut out = Vec::new();
-        for code in stale {
+        if let Some(code) = stale {
+            self.last_pressed = None;
             self.key_seen.remove(&code);
             self.phys_down.remove(&code);
             self.swallow.remove(&code);
@@ -241,6 +261,10 @@ impl Switcher {
                     if !matches!(self.key_dest.get(&code), Some(Some(_))) {
                         self.phys_down.remove(&code);
                         self.key_dest.remove(&code);
+                        self.key_seen.remove(&code);
+                        if self.last_pressed == Some(code) {
+                            self.last_pressed = None;
+                        }
                     }
                 }
                 Decision::default()
@@ -357,10 +381,16 @@ impl Switcher {
         if down {
             self.key_dest.insert(code, dest);
             self.key_seen.insert(code, now);
+            if !repeat {
+                self.last_pressed = Some(code);
+            }
         } else {
             self.key_dest.remove(&code);
             self.key_seen.remove(&code);
             self.pressed_here.remove(&code);
+            if self.last_pressed == Some(code) {
+                self.last_pressed = None;
+            }
         }
 
         if self.swallow.contains(&code) {
@@ -411,10 +441,18 @@ impl Switcher {
             return Vec::new();
         }
         self.keyboard = to;
-        // A key that only looks held must not be pressed over there.
+        // A key that only looks held must not be pressed over there: a
+        // press with no release to follow sticks (Shift held for good).
+        // Move only modifiers certainly held; the rest finish where they are.
         let mut moves = self.release_stale(now);
+        let held: HashSet<u16> = self
+            .key_dest
+            .keys()
+            .copied()
+            .filter(|&code| hotkey::is_modifier(code) && self.surely_held(code, now))
+            .collect();
         for (&code, dest) in self.key_dest.iter_mut() {
-            if hotkey::is_modifier(code) && *dest != to {
+            if held.contains(&code) && *dest != to {
                 moves.push((*dest, InputEvent::Key { code, down: false }));
                 moves.push((to, InputEvent::Key { code, down: true }));
                 if dest.is_none() {
@@ -1054,6 +1092,31 @@ mod tests {
                 down: false
             }
         )));
+    }
+
+    #[test]
+    fn shift_held_while_using_arrows_stays_held() {
+        // Pressing an arrow stops Shift repeating, though it's still held:
+        // that silence must not count as Shift being let go.
+        let (mut s, t) = shift_release_lost();
+        s.handle(key(106, true), t + SEC / 2, right_only); // Right arrow
+        s.handle(key(106, false), t + SEC, right_only);
+        assert!(s.release_stale(t + 10 * SEC).is_empty(), "Shift may well be held");
+        // Can't be sure it's held: a click doesn't press it here, and its
+        // release still goes where it was pressed.
+        let d = s.handle(button(true), t + 10 * SEC, right_only);
+        assert!(d.before.is_empty(), "{:?}", d.before);
+        let d = s.handle(key(SHIFT, false), t + 11 * SEC, right_only);
+        assert_eq!(
+            d.forward,
+            Some(Forward::Reliable(
+                0,
+                InputEvent::Key {
+                    code: SHIFT,
+                    down: false
+                }
+            ))
+        );
     }
 
     #[test]
