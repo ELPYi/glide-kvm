@@ -21,6 +21,10 @@ use crate::platform::{Captured, EdgeHit};
 /// A pause in edge pushing longer than this restarts the edge-delay timer.
 const PUSH_GAP: Duration = Duration::from_millis(100);
 const KEY_ESC: u16 = 1;
+/// A held key repeats (Windows: at least every ~1 s, counting the delay
+/// before repeating starts). One unseen for this long isn't held any more:
+/// its release went missing.
+const STALE_KEY: Duration = Duration::from_secs(2);
 
 /// What the server should do with one captured event.
 #[derive(Debug, Default, PartialEq)]
@@ -90,6 +94,13 @@ pub struct Switcher {
     /// Where each held key's press went (`None` = here). Its repeats and
     /// release go to the same place, or it would stay stuck down there.
     key_dest: HashMap<u16, Option<usize>>,
+    /// When each held key last went down or repeated.
+    key_seen: HashMap<u16, Instant>,
+    /// Held keys pressed on this PC by glide (a modifier moved here by a
+    /// click), not by the keyboard: glide must release them here too.
+    pressed_here: HashSet<u16>,
+    /// Held keys keep repeating on this OS, so a silent one isn't held.
+    keys_repeat: bool,
     /// Buttons already held here when we switched away (same reason).
     held_buttons_at_grab: HashSet<Button>,
     /// Hotkeys whose autorepeat and release should be swallowed.
@@ -111,6 +122,9 @@ impl Switcher {
             remote_buttons: HashSet::new(),
             keyboard: None,
             key_dest: HashMap::new(),
+            key_seen: HashMap::new(),
+            pressed_here: HashSet::new(),
+            keys_repeat: false,
             held_buttons_at_grab: HashSet::new(),
             swallow: HashSet::new(),
             edge_push: None,
@@ -136,6 +150,43 @@ impl Switcher {
         if let Some(peer) = self.keyboard.take() {
             self.key_dest.retain(|_, d| *d != Some(peer));
         }
+    }
+
+    /// Held keys keep repeating on this OS (Windows), which lets glide spot
+    /// a key whose release it never saw (see [`Switcher::release_stale`]).
+    pub fn set_keys_repeat(&mut self, on: bool) {
+        self.keys_repeat = on;
+    }
+
+    /// Keys that look held but stopped repeating: their release went
+    /// missing (the hook was paused, a secure screen took it). Forget them,
+    /// and release them wherever glide pressed them, or Shift stays down
+    /// there for good. Returns the releases to send (`None` = this PC).
+    pub fn release_stale(&mut self, now: Instant) -> Vec<(Option<usize>, InputEvent)> {
+        if !self.keys_repeat {
+            return Vec::new();
+        }
+        let stale: Vec<u16> = self
+            .key_seen
+            .iter()
+            .filter(|(_, &t)| now.saturating_duration_since(t) >= STALE_KEY)
+            .map(|(&code, _)| code)
+            .collect();
+        let mut out = Vec::new();
+        for code in stale {
+            self.key_seen.remove(&code);
+            self.phys_down.remove(&code);
+            self.swallow.remove(&code);
+            let up = InputEvent::Key { code, down: false };
+            match self.key_dest.remove(&code) {
+                Some(Some(peer)) => out.push((Some(peer), up)),
+                // Only release here what glide pressed here; the keyboard's
+                // own presses are the OS's to track.
+                _ if self.pressed_here.remove(&code) => out.push((None, up)),
+                _ => {}
+            }
+        }
+        out
     }
 
     pub fn locked(&self) -> bool {
@@ -198,8 +249,8 @@ impl Switcher {
                 forward: self.active.map(|_| Forward::Motion { dx, dy }),
                 ..Default::default()
             },
-            Captured::Input(ev @ InputEvent::Key { code, down }) => self.on_key(ev, code, down),
-            Captured::Input(ev @ InputEvent::Button { button, down }) => self.on_button(ev, button, down),
+            Captured::Input(ev @ InputEvent::Key { code, down }) => self.on_key(ev, code, down, now),
+            Captured::Input(ev @ InputEvent::Button { button, down }) => self.on_button(ev, button, down, now),
             Captured::Input(ev @ InputEvent::Wheel { .. }) => match self.active {
                 Some(peer) => Decision {
                     block: true,
@@ -286,7 +337,7 @@ impl Switcher {
         Some(Switch::Leave { peer, warp })
     }
 
-    fn on_key(&mut self, ev: InputEvent, code: u16, down: bool) -> Decision {
+    fn on_key(&mut self, ev: InputEvent, code: u16, down: bool, now: Instant) -> Decision {
         let block = Decision {
             block: true,
             ..Default::default()
@@ -305,8 +356,11 @@ impl Switcher {
         };
         if down {
             self.key_dest.insert(code, dest);
+            self.key_seen.insert(code, now);
         } else {
             self.key_dest.remove(&code);
+            self.key_seen.remove(&code);
+            self.pressed_here.remove(&code);
         }
 
         if self.swallow.contains(&code) {
@@ -352,25 +406,32 @@ impl Switcher {
     /// A click moves the keyboard to the PC the cursor is on. Held modifiers
     /// move with it (released where they were, pressed there), so Ctrl+click
     /// and Shift+click work on that PC.
-    fn keyboard_to(&mut self, to: Option<usize>) -> Vec<(Option<usize>, InputEvent)> {
+    fn keyboard_to(&mut self, to: Option<usize>, now: Instant) -> Vec<(Option<usize>, InputEvent)> {
         if !self.settings.keyboard_follows_click || self.keyboard == to {
             return Vec::new();
         }
         self.keyboard = to;
-        let mut moves = Vec::new();
+        // A key that only looks held must not be pressed over there.
+        let mut moves = self.release_stale(now);
         for (&code, dest) in self.key_dest.iter_mut() {
             if hotkey::is_modifier(code) && *dest != to {
                 moves.push((*dest, InputEvent::Key { code, down: false }));
                 moves.push((to, InputEvent::Key { code, down: true }));
+                if dest.is_none() {
+                    self.pressed_here.remove(&code);
+                }
+                if to.is_none() {
+                    self.pressed_here.insert(code);
+                }
                 *dest = to;
             }
         }
         moves
     }
 
-    fn on_button(&mut self, ev: InputEvent, button: Button, down: bool) -> Decision {
+    fn on_button(&mut self, ev: InputEvent, button: Button, down: bool, now: Instant) -> Decision {
         let before = if down {
-            self.keyboard_to(self.active)
+            self.keyboard_to(self.active, now)
         } else {
             Vec::new()
         };
@@ -925,6 +986,90 @@ mod tests {
             "Shift released on the client: {:?}",
             d.before
         );
+    }
+
+    const SEC: Duration = Duration::from_secs(1);
+
+    /// Typing goes to the client, Shift is pressed there, and its release
+    /// never reaches glide. Returns the switcher with the cursor back here.
+    fn shift_release_lost() -> (Switcher, Instant) {
+        let mut s = follows_click();
+        s.set_keys_repeat(true);
+        let t = Instant::now();
+        enter(&mut s, t);
+        s.handle(button(true), t, right_only);
+        s.handle(button(false), t, right_only);
+        s.force_leave();
+        assert!(s.handle(key(SHIFT, true), t, right_only).forward.is_some());
+        (s, t)
+    }
+
+    #[test]
+    fn a_lost_release_does_not_hold_shift_down_here_after_a_click() {
+        // The bug: clicking here moved the "held" Shift with the keyboard,
+        // pressing it on this PC with no release ever to follow. Everything
+        // came out in capitals, and a click on "new tab" opened a window.
+        let (mut s, t) = shift_release_lost();
+        let d = s.handle(button(true), t + 3 * SEC, right_only);
+        assert_eq!(
+            d.before,
+            [(
+                Some(0),
+                InputEvent::Key {
+                    code: SHIFT,
+                    down: false
+                }
+            )],
+            "released over there, not pressed here"
+        );
+    }
+
+    #[test]
+    fn a_lost_release_is_sent_on_its_own() {
+        let (mut s, t) = shift_release_lost();
+        assert!(s.release_stale(t + SEC).is_empty(), "may still be held");
+        let up = InputEvent::Key {
+            code: SHIFT,
+            down: false,
+        };
+        assert_eq!(s.release_stale(t + 3 * SEC), [(Some(0), up)]);
+        assert!(s.release_stale(t + 9 * SEC).is_empty(), "once");
+    }
+
+    #[test]
+    fn a_held_key_that_keeps_repeating_stays_held() {
+        let (mut s, t) = shift_release_lost();
+        for i in 1..=10 {
+            s.handle(key(SHIFT, true), t + i * SEC / 2, right_only); // repeats
+        }
+        assert!(s.release_stale(t + 6 * SEC).is_empty());
+        // Shift+click here, while really held: it moves here, then its own
+        // release lets go of it here.
+        let d = s.handle(button(true), t + 6 * SEC, right_only);
+        assert_eq!(d.before.len(), 2, "{:?}", d.before);
+        assert!(s.release_stale(t + 20 * SEC).contains(&(
+            None,
+            InputEvent::Key {
+                code: SHIFT,
+                down: false
+            }
+        )));
+    }
+
+    #[test]
+    fn keys_the_keyboard_holds_here_are_left_to_the_os() {
+        let mut s = follows_click();
+        s.set_keys_repeat(true);
+        let t = Instant::now();
+        s.handle(key(SHIFT, true), t, right_only);
+        assert!(s.release_stale(t + 9 * SEC).is_empty(), "nothing glide pressed");
+    }
+
+    #[test]
+    fn without_repeats_nothing_is_released() {
+        let (mut s, t) = shift_release_lost();
+        s.set_keys_repeat(false); // macOS: held modifiers don't repeat
+        assert!(s.release_stale(t + 60 * SEC).is_empty());
     }
 
     #[test]

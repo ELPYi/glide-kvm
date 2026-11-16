@@ -33,7 +33,7 @@ use crate::clip::sync::{ClipInbox, ClipMsg, ClipNet};
 use crate::config::{ClientEntry, Config, SwitchSettings};
 use crate::game::{self, GameSettings};
 use crate::hotkey::{Hotkey, Hotkeys};
-use crate::input::Side;
+use crate::input::{InputEvent, Side};
 use crate::log;
 use crate::net::addr::{self, resolve};
 use crate::net::crypto::{self, Cipher};
@@ -138,7 +138,11 @@ impl Server {
             client_port: cfg.port,
             state: Mutex::new(State {
                 peers: cfg.clients.iter().cloned().map(Peer::new).collect(),
-                switcher: Switcher::new(cfg.switching, cfg.hotkeys),
+                switcher: {
+                    let mut s = Switcher::new(cfg.switching, cfg.hotkeys);
+                    s.set_keys_repeat(cfg!(windows));
+                    s
+                },
                 motion: MotionBuf::default(),
                 game: None,
             }),
@@ -838,6 +842,16 @@ impl Server {
                     } else {
                         log!("{} disconnected", p.entry.name);
                     }
+                }
+            }
+            // Keys whose release went missing: let go of them.
+            for (to, ev) in st.switcher.release_stale(now) {
+                if let InputEvent::Key { code, .. } = ev {
+                    log!("released key {code}: it looked held, but its release never came");
+                }
+                match to {
+                    None => self.desktop.inject(&ev),
+                    Some(i) => self.send_input(&mut st, i, ev),
                 }
             }
             // Addresses can change (DHCP, roaming); keep mutes pointed right.
